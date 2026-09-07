@@ -1,0 +1,41 @@
+name: Juniper Operating Coverage
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/juniper-operating-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'scripts/ss_juniper_operating.php'
+      - 'phpunit-juniper-operating.xml'
+      - 'tests/Unit/DataCollection/Scripts/JuniperOperatingTest.php'
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/juniper-operating-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'scripts/ss_juniper_operating.php'
+      - 'phpunit-juniper-operating.xml'
+      - 'tests/Unit/DataCollection/Scripts/JuniperOperatingTest.php'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: juniper-operating-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    uses: ./.github/workflows/script-coverage.yml
+    with:
+      job-name: scripts/ss_juniper_operating.php 100% coverage
+      phpunit-config: phpunit-juniper-operating.xml
+      extensions: intl, mysql, gd, ldap, gmp, xml, curl, json, mbstring, snmp

@@ -1,0 +1,41 @@
+name: Entity Sensor Coverage
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/entity-sensor-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'scripts/ss_entity_sensor.php'
+      - 'phpunit-entity-sensor.xml'
+      - 'tests/Unit/DataCollection/Scripts/EntitySensorTest.php'
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/entity-sensor-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'scripts/ss_entity_sensor.php'
+      - 'phpunit-entity-sensor.xml'
+      - 'tests/Unit/DataCollection/Scripts/EntitySensorTest.php'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: entity-sensor-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    uses: ./.github/workflows/script-coverage.yml
+    with:
+      job-name: scripts/ss_entity_sensor.php 100% coverage
+      phpunit-config: phpunit-entity-sensor.xml
+      extensions: intl, mysql, gd, ldap, gmp, xml, curl, json, mbstring, snmp

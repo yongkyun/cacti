@@ -719,19 +719,19 @@ function update_system_mibs(int $host_id) : void {
 
 	if (cacti_sizeof($h)) {
 		$session        = open_snmp_session($host_id, $h);
-		$uptimeAltFound = false;
 		$uptime         = false;
+		$engine_time    = false;
+		$system_uptime  = false;
 
 		if ($session !== false) {
 			foreach ($system_mibs as $name => $oid) {
 				$value = cacti_snmp_session_get($session, $oid);
 
-				if ($name == 'snmp_sysUpTimeInstanceAlt' && $value > 0) {
-					$uptime         = $value * 100;
-					$uptimeAltFound = true;
-				} elseif ($name == 'snmp_sysUpTimeInstance' && !$uptimeAltFound) {
-					$uptime = $value;
-				} elseif ($name != 'snmp_sysUpTimeInstanceAlt' && !empty($value)) {
+				if ($name == 'snmp_sysUpTimeInstanceAlt') {
+					$engine_time = $value;
+				} elseif ($name == 'snmp_sysUpTimeInstance') {
+					$system_uptime = $value;
+				} elseif (!empty($value)) {
 					db_execute_prepared("UPDATE host SET $name = ?
 						WHERE deleted = ''
 						AND id = ?",
@@ -739,6 +739,8 @@ function update_system_mibs(int $host_id) : void {
 					);
 				}
 			}
+
+			$uptime = cacti_snmp_select_uptime($system_uptime, $engine_time);
 
 			if ($uptime !== false) {
 				db_execute_prepared("UPDATE host SET snmp_sysUpTimeInstance = ?
@@ -912,15 +914,19 @@ function ping_and_reindex_check(array &$item, bool $mibs, int $script_timeout) :
 
 						if ($session !== false) {
 							if (trim($index_item['arg1']) == '.1.3.6.1.2.1.1.3.0') {
-								$output = cacti_snmp_session_get($session, '.1.3.6.1.6.3.10.2.1.3.0');
+								$engine_time   = cacti_snmp_session_get($session, '.1.3.6.1.6.3.10.2.1.3.0');
+								$system_uptime = cacti_snmp_session_get($session, $index_item['arg1']);
+								$output        = cacti_snmp_select_uptime($system_uptime, $engine_time);
 
-								if ($output > 0) {
-									$output *= 100;
-								} else {
-									$output = cacti_snmp_session_get($session, $index_item['arg1']);
+								if ($output === false) {
+									$output = 'U';
 								}
 							} else {
 								$output = cacti_snmp_session_get($session, $index_item['arg1']);
+
+								if ($output === false) {
+									$output = 'U';
+								}
 							}
 						} else {
 							$output = 'U';

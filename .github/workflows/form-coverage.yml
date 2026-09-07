@@ -1,0 +1,40 @@
+name: Form Coverage
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/form-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'lib/CactiForm.php'
+      - 'phpunit-form-coverage.xml'
+      - 'sites.php'
+      - 'tests/Unit/CactiFormTest.php'
+      - 'tests/integration/CactiFormIntegrationTest.php'
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/form-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'lib/CactiForm.php'
+      - 'phpunit-form-coverage.xml'
+      - 'sites.php'
+      - 'tests/Unit/CactiFormTest.php'
+      - 'tests/integration/CactiFormIntegrationTest.php'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: form-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    uses: ./.github/workflows/script-coverage.yml
+    with:
+      job-name: Form API 100% coverage
+      phpunit-config: phpunit-form-coverage.xml

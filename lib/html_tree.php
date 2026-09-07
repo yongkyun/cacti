@@ -1049,7 +1049,7 @@ function create_tree_filter() : array {
 					'method'         => 'filter_checkbox',
 					'friendly_name'  => __('Thumbnails'),
 					'filter'         => FILTER_VALIDATE_REGEXP,
-					'filter_options' => ['options' => ['regexp' => '(true|false)']],
+					'filter_options' => ['options' => ['regexp' => '/^(true|false)$/']],
 					'default'        => read_user_setting('thumbnail_section_tree') == 'on' ? 'true' : 'false',
 					'value'          => $thumbnails
 				],
@@ -1057,7 +1057,7 @@ function create_tree_filter() : array {
 					'method'         => 'filter_checkbox',
 					'friendly_name'  => __('Business Hours'),
 					'filter'         => FILTER_VALIDATE_REGEXP,
-					'filter_options' => ['options' => ['regexp' => '(true|false)']],
+					'filter_options' => ['options' => ['regexp' => '/^(true|false)$/']],
 					'default'        => read_user_setting('show_business_hours') == 'on' ? 'true' : 'false',
 					'value'          => $business_hours
 				]
@@ -1285,7 +1285,7 @@ function grow_right_pane_tree(int $tree_id, int $leaf_id, string $host_group_dat
 			WHERE id = ?',
 			[$host_group_data_array[1]]);
 
-		$host_group_data_name = '<i class="bold">' . __('Graph Template:') . '</i> ' . (empty($host_group_data_array[1]) ? __('Non Query Based') : htmle($name)) . '-> ' . (empty($host_group_data_array[2]) ? __('Template Based') : get_formatted_data_query_index($leaf['host_id'], intval($host_group_data_array[1]), $host_group_data_array[2]));
+		$host_group_data_name = '<i class="bold">' . __('Graph Template:') . '</i> ' . (empty($host_group_data_array[1]) ? __('Non Query Based') : htmle($name)) . '-> ' . (empty($host_group_data_array[2]) ? __('Template Based') : htmle(get_formatted_data_query_index($leaf['host_id'], intval($host_group_data_array[1]), $host_group_data_array[2])));
 		$data_query_id        = intval($host_group_data_array[1]);
 		$data_query_index     = $host_group_data_array[2];
 	}

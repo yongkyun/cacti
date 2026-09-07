@@ -124,7 +124,8 @@ class CactiTableFilter {
 					'filter' => [
 						'method'         => 'textbox',
 						'friendly_name'  => __('Search'),
-						'filter'         => FILTER_DEFAULT,
+						'filter'         => FILTER_CALLBACK,
+						'options'        => ['options' => 'sanitize_search_string'],
 						'placeholder'    => __('Enter a search term'),
 						'size'           => '30',
 						'default'        => '',
@@ -306,7 +307,7 @@ class CactiTableFilter {
 					'method'         => 'filter_checkbox',
 					'friendly_name'  => __('Has Graphs'),
 					'filter'         => FILTER_VALIDATE_REGEXP,
-					'filter_options' => ['options' => ['regexp' => '(true|false)']],
+					'filter_options' => ['options' => ['regexp' => '/^(true|false)$/']],
 					'default'        => read_config_option('default_has') == 'on' ? 'true' : 'false',
 					'pageset'        => true,
 					'value'          => $value
@@ -326,7 +327,7 @@ class CactiTableFilter {
 					'method'         => 'filter_checkbox',
 					'friendly_name'  => __('Has Data Sources'),
 					'filter'         => FILTER_VALIDATE_REGEXP,
-					'filter_options' => ['options' => ['regexp' => '(true|false)']],
+					'filter_options' => ['options' => ['regexp' => '/^(true|false)$/']],
 					'default'        => read_config_option('default_has') == 'on' ? 'true' : 'false',
 					'pageset'        => true,
 					'value'          => $value
@@ -346,7 +347,7 @@ class CactiTableFilter {
 					'method'         => 'filter_checkbox',
 					'friendly_name'  => __('Named Colors'),
 					'filter'         => FILTER_VALIDATE_REGEXP,
-					'filter_options' => ['options' => ['regexp' => '(true|false)']],
+					'filter_options' => ['options' => ['regexp' => '/^(true|false)$/']],
 					'default'        => read_config_option('default_has') == 'on' ? 'true' : 'false',
 					'pageset'        => true,
 					'value'          => $value
@@ -366,7 +367,7 @@ class CactiTableFilter {
 					'method'         => 'filter_checkbox',
 					'friendly_name'  => ($this->associated_label != '' ? $this->associated_label : __('Associated')),
 					'filter'         => FILTER_VALIDATE_REGEXP,
-					'filter_options' => ['options' => ['regexp' => '(true|false)']],
+					'filter_options' => ['options' => ['regexp' => '/^(true|false)$/']],
 					'default'        => read_config_option('default_has') == 'on' ? 'true' : 'false',
 					'pageset'        => true,
 					'value'          => $value

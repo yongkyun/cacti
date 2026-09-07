@@ -2072,6 +2072,7 @@ CREATE TABLE `host` (
   created timestamp default CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY poller_id_disabled (poller_id, disabled),
+  KEY host_template_id (host_template_id),
   KEY external_id (external_id),
   KEY disabled (disabled),
   KEY status (status),
@@ -2666,6 +2667,17 @@ CREATE TABLE `processes` (
   KEY `tasktype` (`tasktype`),
   KEY `id` (`id`)
 ) ENGINE=MEMORY COMMENT='Stores Process Status for Cacti Background Processes';
+
+--
+-- Table structure for table `process_locks`
+--
+
+CREATE TABLE `process_locks` (
+  `key_id` varchar(64) NOT NULL,
+  `key_token` varchar(44) NOT NULL,
+  `key_expiration` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`key_id`)
+) ENGINE=InnoDB COMMENT='Serializes Cacti Process Registry Mutations';
 
 --
 -- Table structure for table `reports`
@@ -3266,7 +3278,9 @@ CREATE TABLE `sessions` (
   `user_agent` varchar(128) NOT NULL default '',
   `start_time` timestamp NOT NULL default current_timestamp,
   `transactions` int(10) unsigned NOT NULL default '1',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `user_id` (`user_id`),
+  KEY `access` (`access`)
 ) ENGINE=InnoDB ROW_FORMAT=Dynamic COMMENT='Used for Database based Session Storage';
 
 --

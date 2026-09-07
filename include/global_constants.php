@@ -22,7 +22,7 @@
  +-------------------------------------------------------------------------+
 */
 
-define('CACTI_PHP_VERSION_MINIMUM', '7.4.0');
+define('CACTI_PHP_VERSION_MINIMUM', '8.3.0');
 
 define('CACTI_DEV_VERSION','1.3.0.99.1593739325');
 
@@ -49,6 +49,7 @@ define('RRDTOOL_OUTPUT_STDERR', 2);
 define('RRDTOOL_OUTPUT_GRAPH_DATA', 3);
 define('RRDTOOL_OUTPUT_BOOLEAN', 4);
 define('RRDTOOL_OUTPUT_RETURN_STDERR', 5);
+define('REMOTE_AGENT_MAX_RESPONSE_BYTES', 64 * 1024 * 1024);
 
 define('RRD_FONT_RENDER_NORMAL',  'normal');
 define('RRD_FONT_RENDER_LIGHT',   'light');

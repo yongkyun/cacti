@@ -286,11 +286,15 @@ if (isset($i18n_text_log)) {
 // include base modules
 require_once(CACTI_PATH_LIBRARY . '/database.php');
 require_once(CACTI_PATH_LIBRARY . '/functions.php');
+require_once(CACTI_PATH_LIBRARY . '/graph_template_input.php');
+require_once(CACTI_PATH_LIBRARY . '/renderer.php');
+require_once(CACTI_PATH_LIBRARY . '/headers_secure.php');
 require_once(CACTI_PATH_INCLUDE . '/global_constants.php');
 
 define('CACTI_VERSION', format_cacti_version($cacti_version, CACTI_VERSION_FORMAT_SHORT));
 define('CACTI_VERSION_FULL', format_cacti_version($cacti_version, CACTI_VERSION_FORMAT_FULL));
 
+require_once(CACTI_PATH_LIBRARY . '/htmx.php');
 require_once(CACTI_PATH_LIBRARY . '/html.php');
 require_once(CACTI_PATH_LIBRARY . '/html_utility.php');
 require_once(CACTI_PATH_LIBRARY . '/html_validate.php');
@@ -577,8 +581,19 @@ db_cacti_initialized($config['is_web']);
 
 if ($config['is_web']) {
 	if (read_config_option('force_https') == 'on') {
-		if (!cacti_is_https() && isset($_SERVER['HTTP_HOST']) && isset($_SERVER['REQUEST_URI'])) {
-			header('Location: https://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+		if (!cacti_is_https()) {
+			$location = cacti_build_https_redirect_url(
+				$_SERVER['SERVER_NAME'] ?? '',
+				$_SERVER['REQUEST_URI'] ?? '',
+				CACTI_PATH_URL
+			);
+
+			if ($location === '') {
+				http_response_code(400);
+				exit;
+			}
+
+			header('Location: ' . $location);
 
 			exit;
 		}
@@ -628,16 +643,19 @@ if ($config['is_web']) {
 	header('X-Frame-Options: SAMEORIGIN');
 
 	// increased web hardening
-	$script_policy = read_config_option('content_security_policy_script');
+	$alternates = CactiSecureHeaders::normalizeAlternateSources(read_config_option('content_security_alternate_sources'));
+	$script_src = CactiSecureHeaders::scriptSrc($alternates);
+	$report_uri = CactiSecureHeaders::getCspMode() === 'nonce-enforce' ?
+		CactiSecureHeaders::reportUriDirective() : '';
 
-	if ($script_policy == 'unsafe-eval') {
-		$script_policy = "'$script_policy'";
-	} else {
-		$script_policy = '';
+	header("Content-Security-Policy: default-src *; img-src 'self' https://api.qrserver.com $alternates data: blob:; style-src 'self' 'unsafe-inline' $alternates; $script_src; frame-ancestors 'self' $alternates; worker-src 'self' $alternates;$report_uri");
+
+	$report_script_src = CactiSecureHeaders::reportOnlyScriptSrc($alternates);
+
+	if ($report_script_src !== '') {
+		$report_uri = CactiSecureHeaders::reportUriDirective();
+		header("Content-Security-Policy-Report-Only: default-src *; img-src 'self' https://api.qrserver.com $alternates data: blob:; style-src 'self' 'unsafe-inline' $alternates; $report_script_src; frame-ancestors 'self' $alternates; worker-src 'self' $alternates;$report_uri");
 	}
-	$alternates = htmle(read_config_option('content_security_alternate_sources'));
-
-	header("Content-Security-Policy: default-src *; img-src 'self' https://api.qrserver.com $alternates data: blob:; style-src 'self' 'unsafe-inline' $alternates; script-src 'self' $script_policy 'unsafe-inline' $alternates; frame-ancestors 'self'; worker-src 'self' $alternates;");
 
 	// prevent IE from silently rejects cookies sent from third party sites.
 	header('P3P: CP="CAO PSA OUR"');
@@ -712,6 +730,7 @@ require_once(CACTI_PATH_LIBRARY . '/snmpagent.php');
 require_once(CACTI_PATH_LIBRARY . '/aggregate.php');
 require_once(CACTI_PATH_LIBRARY . '/api_automation.php');
 require_once(CACTI_PATH_INCLUDE . '/csrf.php');
+require_once(CACTI_PATH_INCLUDE . '/domain.php');
 
 if (is_file($vendor_autoload)) {
 	require_once($vendor_autoload);
@@ -773,7 +792,18 @@ if ($config['is_web']) {
 	if (isrv('action')) {
 		$action = gnrv('action');
 
-		$bad_actions = ['save', 'update_data', 'changepassword'];
+		// State-changing actions must arrive by POST with a CSRF token. The
+		// delete actions below were reachable by GET, so a cross-origin <img>
+		// or link could delete a tree node, graph template, data query or
+		// automation rule using only the victim's session cookie.
+		//
+		// 'remove' and 'change_leaf' belong to the three automation pages and
+		// no page links either by GET, so a request carrying them was always a
+		// crafted one. item_remove, item_moveup and item_movedown are the same
+		// class but are still linked by GET from roughly fifteen pages; adding
+		// them here before those links post would break the delete they are
+		// meant to protect.
+		$bad_actions = ['save', 'update_data', 'changepassword', 'delete_node', 'gt_remove', 'query_remove', 'remove', 'change_leaf'];
 
 		foreach ($bad_actions as $bad) {
 			if ($action == $bad && !isset($_POST['__csrf_magic'])) {

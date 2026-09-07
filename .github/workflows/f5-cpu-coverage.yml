@@ -1,0 +1,41 @@
+name: F5 Cpu Coverage
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/f5-cpu-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'scripts/ss_f5_cpu.php'
+      - 'phpunit-f5-cpu.xml'
+      - 'tests/Unit/DataCollection/Scripts/F5CpuTest.php'
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/f5-cpu-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'scripts/ss_f5_cpu.php'
+      - 'phpunit-f5-cpu.xml'
+      - 'tests/Unit/DataCollection/Scripts/F5CpuTest.php'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f5-cpu-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    uses: ./.github/workflows/script-coverage.yml
+    with:
+      job-name: scripts/ss_f5_cpu.php 100% coverage
+      phpunit-config: phpunit-f5-cpu.xml
+      extensions: intl, mysql, gd, ldap, gmp, xml, curl, json, mbstring, snmp

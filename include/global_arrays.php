@@ -280,6 +280,9 @@ $messages = [
 	44 => [
 		'message' => __('Unable to change password.  User account not found.'),
 		'level'   => MESSAGE_LEVEL_ERROR],
+	45 => [
+		'message' => __('Data Source Item field holds a value the Data Source form would reject.'),
+		'level'   => MESSAGE_LEVEL_ERROR],
 	'input_save_wo_ds' => [
 		'message' => __('Data Input Saved.  You must update the Data Templates referencing this Data Input Method before creating Graphs or Data Sources.'),
 		'level'   => MESSAGE_LEVEL_INFO],
@@ -988,13 +991,15 @@ $ldap_modes = [
 ];
 
 $rrdtool_versions = [
-	'1.5.0' => 'RRDtool 1.5+',
-	'1.6.0' => 'RRDtool 1.6+',
-	'1.7.0' => 'RRDtool 1.7+',
-	'1.7.1' => 'RRDtool 1.7.1+',
-	'1.7.2' => 'RRDtool 1.7.2+',
-	'1.8.0' => 'RRDtool 1.8+',
-	'1.9.0' => 'RRDtool 1.9+'
+	'1.5.0'  => 'RRDtool 1.5+',
+	'1.6.0'  => 'RRDtool 1.6+',
+	'1.7.0'  => 'RRDtool 1.7+',
+	'1.7.1'  => 'RRDtool 1.7.1+',
+	'1.7.2'  => 'RRDtool 1.7.2+',
+	'1.8.0'  => 'RRDtool 1.8+',
+	'1.9.0'  => 'RRDtool 1.9+',
+	'1.10.0' => 'RRDtool 1.10+',
+	'1.11.0' => 'RRDtool 1.11+'
 ];
 
 $i18n_modes = [

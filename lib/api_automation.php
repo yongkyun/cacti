@@ -179,16 +179,17 @@ function display_matching_hosts(array $rule, int $rule_type, string $url) : void
 	);
 
 	$total_rows     = cacti_sizeof(db_fetch_assoc($details['rows_query'], false));
-	$sort_column    = api_automation_column_exists(grv('sort_column'), ['host', 'graph_local', 'sites', 'graph_templates', 'graph_templates_graph', 'host_template']) ? grv('sort_column') : 'description';
-	$sort_direction = in_array(strtoupper((string) grv('sort_direction')), ['ASC', 'DESC'], true) ? strtoupper((string) grv('sort_direction')) : 'ASC';
+	$sort_column    = sanitize_sql_column((string) grv('sort_column'), '');
+	$sort_column    = api_automation_column_exists($sort_column, ['host', 'graph_local', 'sites', 'graph_templates', 'graph_templates_graph', 'host_template']) ? $sort_column : 'description';
+	$sort_direction = strtoupper((string) grv('sort_direction')) === 'DESC' ? 'DESC' : 'ASC';
 	$sortby         = str_ends_with($sort_column, 'hostname') ? 'INET_ATON(' . $sort_column . ')' : $sort_column;
 	$sql_query      = $details['rows_query'] .
 		' ORDER BY ' . $sortby . ' ' . $sort_direction .
-		' LIMIT ' . ($details['rows'] * (grv('page') - 1)) . ',' . $details['rows'];
+		' LIMIT ' . ($details['rows'] * (gfrv('page') - 1)) . ',' . $details['rows'];
 
 	$hosts = db_fetch_assoc($sql_query, false);
 
-	$nav = html_nav_bar($url, MAX_DISPLAY_PAGES, grv('page'), $details['rows'], $total_rows, 7, __('Devices'), 'page', 'main');
+	$nav = html_nav_bar($url, MAX_DISPLAY_PAGES, gfrv('page'), $details['rows'], $total_rows, 7, __('Devices'), 'page', 'main');
 
 	print $nav;
 
@@ -235,7 +236,7 @@ function display_matching_hosts(array $rule, int $rule_type, string $url) : void
 		],
 	];
 
-	html_header_sort($display_text, grv('sort_column'), grv('sort_direction'), 1, $url . '?action=edit&id=' . grv('id') . '&page=' . grv('page'));
+	html_header_sort($display_text, grv('sort_column'), grv('sort_direction'), 1, $url . '?action=edit&id=' . grv('id') . '&page=' . gfrv('page'));
 
 	if (cacti_sizeof($hosts)) {
 		foreach ($hosts as $host) {
@@ -274,10 +275,10 @@ function display_matching_hosts(array $rule, int $rule_type, string $url) : void
  */
 function automation_get_matching_device_sql(array &$rule, int $rule_type) : array {
 	// if the number of rows is -1, set it to the default
-	if (grv('rows') == -1) {
+	if (gfrv('rows') == -1) {
 		$rows = read_config_option('num_rows_table');
 	} else {
-		$rows = grv('rows');
+		$rows = gfrv('rows');
 	}
 
 	// form the 'where' clause for our main sql query
@@ -299,7 +300,7 @@ function automation_get_matching_device_sql(array &$rule, int $rule_type) : arra
 		$host_where_disabled = "(IFNULL(TRIM(h.disabled),'') == 'on')";
 	}
 
-	$host_where_status = grv('status');
+	$host_where_status = gfrv('status');
 
 	if ($host_where_status == '-1') {
 		// Show all items
@@ -383,10 +384,10 @@ function automation_get_matching_device_sql(array &$rule, int $rule_type) : arra
  */
 function automation_get_matching_graphs_sql(array $rule, int $rule_type) : array {
 	// if the number of rows is -1, set it to the default
-	if (grv('rows') == -1) {
+	if (gfrv('rows') == -1) {
 		$rows = read_config_option('num_rows_table');
 	} else {
-		$rows = grv('rows');
+		$rows = gfrv('rows');
 	}
 
 	// form the 'where' clause for our main sql query
@@ -407,7 +408,7 @@ function automation_get_matching_graphs_sql(array $rule, int $rule_type) : array
 	} elseif (grv('host_id') == '0') {
 		$sql_where .= ($sql_where != '' ? ' AND ' : ' WHERE ') . ' gl.host_id = 0';
 	} elseif (!ierv('host_id')) {
-		$sql_where .= ($sql_where != '' ? ' AND ' : ' WHERE ') . ' gl.host_id = ' . grv('host_id');
+		$sql_where .= ($sql_where != '' ? ' AND ' : ' WHERE ') . ' gl.host_id = ' . (int) grv('host_id');
 	}
 
 	if (grv('template_id') == '-1') {
@@ -415,7 +416,7 @@ function automation_get_matching_graphs_sql(array $rule, int $rule_type) : array
 	} elseif (grv('template_id') == '0') {
 		$sql_where .= ($sql_where != '' ? ' AND ' : ' WHERE ') . ' gtg.graph_template_id = 0';
 	} elseif (!ierv('template_id')) {
-		$sql_where .= ($sql_where != '' ? ' AND ' : ' WHERE ') . ' gtg.graph_template_id = ' . grv('template_id');
+		$sql_where .= ($sql_where != '' ? ' AND ' : ' WHERE ') . ' gtg.graph_template_id = ' . (int) grv('template_id');
 	}
 
 	// get the WHERE clause for matching graphs
@@ -452,8 +453,9 @@ function automation_get_matching_graphs_sql(array $rule, int $rule_type) : array
 		$sdisabled = "'' AS site_disabled,";
 	}
 
-	$sort_column    = api_automation_column_exists(grv('sort_column'), ['host', 'graph_local', 'sites', 'graph_templates', 'graph_templates_graph', 'host_template']) ? grv('sort_column') : 'title_cache';
-	$sort_direction = in_array(strtoupper((string) grv('sort_direction')), ['ASC', 'DESC'], true) ? strtoupper((string) grv('sort_direction')) : 'ASC';
+	$sort_column    = sanitize_sql_column((string) grv('sort_column'), '');
+	$sort_column    = api_automation_column_exists($sort_column, ['host', 'graph_local', 'sites', 'graph_templates', 'graph_templates_graph', 'host_template']) ? $sort_column : 'title_cache';
+	$sort_direction = strtoupper((string) grv('sort_direction')) === 'DESC' ? 'DESC' : 'ASC';
 
 	$rows_query = "SELECT h.id AS host_id, h.hostname, h.description,
 		h.disabled AS disabled, $sdisabled
@@ -474,7 +476,7 @@ function automation_get_matching_graphs_sql(array $rule, int $rule_type) : array
 		ON h.host_template_id = ht.id
 		$sql_where
 		ORDER BY " . $sort_column . ' ' . $sort_direction . '
-		LIMIT ' . ($rows * (grv('page') - 1)) . ',' . $rows;
+		LIMIT ' . ($rows * (gfrv('page') - 1)) . ',' . $rows;
 
 	return [
 		'rows_query' => $rows_query,
@@ -647,7 +649,7 @@ function display_matching_graphs(array $rule, int $rule_type, string $url) : voi
 		$graph_list = [];
 	}
 
-	$nav = html_nav_bar($url, MAX_DISPLAY_PAGES, grv('page'), $rows, $total_rows, 9, __('Graphs'), 'page', 'main');
+	$nav = html_nav_bar($url, MAX_DISPLAY_PAGES, gfrv('page'), $rows, $total_rows, 9, __('Graphs'), 'page', 'main');
 
 	print $nav;
 
@@ -692,7 +694,7 @@ function display_matching_graphs(array $rule, int $rule_type, string $url) : voi
 		],
 	];
 
-	html_header_sort($display_text, grv('sort_column'), grv('sort_direction'), 1, $url . '?action=edit&id=' . grv('id') . '&page=' . grv('page'));
+	html_header_sort($display_text, grv('sort_column'), grv('sort_direction'), 1, $url . '?action=edit&id=' . grv('id') . '&page=' . gfrv('page'));
 
 	if (cacti_sizeof($graph_list)) {
 		foreach ($graph_list as $graph) {
@@ -776,10 +778,10 @@ function automation_get_new_graphs_sql(array $rule) : mixed {
 	}
 
 	// if the number of rows is -1, set it to the default
-	if (grv('rows') == -1) {
+	if (gfrv('rows') == -1) {
 		$rows = read_config_option('num_rows_table');
 	} else {
-		$rows = grv('rows');
+		$rows = gfrv('rows');
 	}
 
 	$rule_items     = [];
@@ -893,7 +895,7 @@ function automation_get_new_graphs_sql(array $rule) : mixed {
 			$rows_query    = "SELECT * \nFROM (\n" . trim($sql_query) . "\n) AS `a` " . ($sql_filter != '' ? "\nWHERE (\n" . trim($sql_filter) . "\n)" : '') . $sql_having;
 
 			// construct the indexes query
-			$indexes_query = $rows_query . "\nLIMIT " . ($rows * (grv('page') - 1)) . ',' . $rows;
+			$indexes_query = $rows_query . "\nLIMIT " . ($rows * (gfrv('page') - 1)) . ',' . $rows;
 		} else {
 			$rows_query    = '';
 			$indexes_query = '';
@@ -934,7 +936,7 @@ function display_new_graphs(array $rule, string $url) : void {
 	if (isset($details['rows_query']) && $details['rows_query'] != '') {
 		$total_rows = cacti_sizeof(db_fetch_assoc($details['rows_query'], false));
 
-		if ($total_rows < (grv('rows') * (grv('page') - 1)) + 1) {
+		if ($total_rows < (gfrv('rows') * (gfrv('page') - 1)) + 1) {
 			srv('page', '1');
 		}
 
@@ -944,7 +946,7 @@ function display_new_graphs(array $rule, string $url) : void {
 		$rows = $details['rows'];
 		$name = $details['name'];
 
-		$nav = html_nav_bar('automation_graph_rules.php?action=edit&id=' . $rule['id'], MAX_DISPLAY_PAGES, grv('page'), $rows, $total_rows, 30, __('Matching Indexes'), 'page', 'main');
+		$nav = html_nav_bar('automation_graph_rules.php?action=edit&id=' . $rule['id'], MAX_DISPLAY_PAGES, gfrv('page'), $rows, $total_rows, 30, __('Matching Indexes'), 'page', 'main');
 
 		print $nav;
 
@@ -1093,10 +1095,10 @@ function display_matching_trees(int $rule_id, int $rule_type, array $item, strin
 
 	draw_tree_items_filter(true, $url);
 
-	if (grv('rows') == -1) {
+	if (gfrv('rows') == -1) {
 		$rows = read_config_option('num_rows_table');
 	} else {
-		$rows = grv('rows');
+		$rows = gfrv('rows');
 	}
 
 	form_hidden_box('page', '1', '');
@@ -1160,7 +1162,7 @@ function display_matching_trees(int $rule_id, int $rule_type, array $item, strin
 		$host_where_disabled = "(IFNULL(TRIM(h.disabled),'') = 'on')";
 	}
 
-	$host_where_status = grv('status');
+	$host_where_status = gfrv('status');
 
 	if ($host_where_status == '-1') {
 		// Show all items
@@ -1210,19 +1212,20 @@ function display_matching_trees(int $rule_id, int $rule_type, array $item, strin
 
 	$total_rows = cacti_sizeof(db_fetch_assoc($rows_query, false));
 
-	$sort_column    = api_automation_column_exists(grv('sort_column'), ['host', 'graph_local', 'sites', 'graph_templates', 'graph_templates_graph', 'host_template']) ? grv('sort_column') : 'description';
-	$sort_direction = in_array(strtoupper((string) grv('sort_direction')), ['ASC', 'DESC'], true) ? strtoupper((string) grv('sort_direction')) : 'ASC';
+	$sort_column    = sanitize_sql_column((string) grv('sort_column'), '');
+	$sort_column    = api_automation_column_exists($sort_column, ['host', 'graph_local', 'sites', 'graph_templates', 'graph_templates_graph', 'host_template']) ? $sort_column : 'description';
+	$sort_direction = strtoupper((string) grv('sort_direction')) === 'DESC' ? 'DESC' : 'ASC';
 	$sortby         = str_ends_with($sort_column, 'hostname') ? 'INET_ATON(' . $sort_column . ')' : $sort_column;
 
 	$sql_query = "$rows_query ORDER BY $sortby " .
 		$sort_direction . ' LIMIT ' .
-		($rows * (grv('page') - 1)) . ',' . $rows;
+		($rows * (gfrv('page') - 1)) . ',' . $rows;
 
 	$templates = db_fetch_assoc($sql_query, false);
 
 	cacti_log($function . ' templates sql: ' . str_replace("\n",' ', $sql_query), false, 'AUTOM8 TRACE', POLLER_VERBOSITY_DEBUG);
 
-	$nav = html_nav_bar($url, MAX_DISPLAY_PAGES, grv('page'), $rows, $total_rows, 8, __('Devices'), 'page', 'main');
+	$nav = html_nav_bar($url, MAX_DISPLAY_PAGES, gfrv('page'), $rows, $total_rows, 8, __('Devices'), 'page', 'main');
 
 	print $nav;
 
@@ -1306,6 +1309,13 @@ function display_matching_trees(int $rule_id, int $rule_type, array $item, strin
  * @return bool   Returns true if the column exists in any of the tables, false otherwise.
  */
 function api_automation_column_exists(string $column, array $tables) : bool {
+	// SELECT aliases that are valid in ORDER BY but are not real columns.
+	static $aliases = ['site_name', 'host_template_name'];
+
+	if (in_array($column, $aliases, true)) {
+		return true;
+	}
+
 	$column = str_replace(['h.', 'ht.', 'gt.', 'gl.', 'gtg.'], ['', '', '', '', ''], $column);
 
 	if (cacti_sizeof($tables)) {
@@ -1806,8 +1816,38 @@ function build_graph_object_sql_having(array $rule, string $filter) : string {
 			$i = 0;
 
 			foreach ($field_names as $column) {
-				$sql_having .= ($i == 0 ? '' : ' OR ') . '`' . implode('`.`', explode('.', $column['field_name'])) . '`' . ' LIKE ' . db_qstr('%' . $filter . '%');
+				/* The name becomes an identifier in the generated SQL, and it
+				 * arrives from snmp_query_field, which a data query XML import
+				 * populates. A backtick in it would close the quoting the
+				 * backticks below are providing, so confine each part to the
+				 * characters an identifier may hold and drop the field when
+				 * nothing usable survives. */
+				$parts = [];
+
+				foreach (explode('.', $column['field_name']) as $part) {
+					$clean = sanitize_sql_column($part, '');
+
+					if ($clean === '') {
+						$parts = [];
+
+						break;
+					}
+
+					$parts[] = $clean;
+				}
+
+				if (!cacti_sizeof($parts)) {
+					continue;
+				}
+
+				$sql_having .= ($i == 0 ? '' : ' OR ') . '`' . implode('`.`', $parts) . '`' . ' LIKE ' . db_qstr('%' . $filter . '%');
 				$i++;
+			}
+
+			/* Every field being dropped would otherwise remove a requested filter
+			 * or leave invalid SQL. Keep the clause valid and fail closed. */
+			if ($i == 0) {
+				return ' HAVING (1 = 0)';
 			}
 
 			$sql_having .= ')';
@@ -1950,7 +1990,39 @@ function build_rule_item_filter(array $automation_rule_items, string $prefix = '
 
 			// field name
 			if ($automation_rule_item['field'] != '') {
-				$sql_filter .= ' ' . $prefix . '`' . implode('`.`', explode('.', $automation_rule_item['field'])) . '`';
+				/* 1.2.x confines this name with sanitize_sql_column() and that
+				 * call was lost here. The field is stored with the rule item
+				 * and becomes an identifier below, so a backtick in it would
+				 * close the quoting rather than be quoted by it.
+				 *
+				 * Confine each dot separated part rather than the whole name:
+				 * the helper permits '.', so 'a.' survives it intact and then
+				 * splits into 'a' and an empty segment, which renders as an
+				 * empty backticked identifier. A part left with nothing usable
+				 * drops the whole item instead. */
+				$field_parts = [];
+
+				foreach (explode('.', $automation_rule_item['field']) as $field_part) {
+					$clean_part = sanitize_sql_column($field_part, '');
+
+					if ($clean_part === '') {
+						$field_parts = [];
+
+						break;
+					}
+
+					$field_parts[] = $clean_part;
+				}
+
+				if (!cacti_sizeof($field_parts)) {
+					// The operation token may already be present; complete it with a
+					// predicate that fails closed instead of leaving invalid SQL.
+					$sql_filter .= ' 1 = 0';
+
+					continue;
+				}
+
+				$sql_filter .= ' ' . $prefix . '`' . implode('`.`', $field_parts) . '`';
 				$sql_filter .= ' ' . $automation_op_array['op'][$automation_rule_item['operator']] . ' ';
 
 				if ($automation_op_array['binary'][$automation_rule_item['operator']]) {
@@ -4000,22 +4072,16 @@ function automation_get_next_host(string $start, int $total, int $count, string 
 		// 10.1.*.1
 		return $matches[1] . ++$count . $matches[2];
 	} else {
-		// other cases
-		$ip = explode('.', $start);
-		$y  = 16777216;
+		// Offset from the start address. Walking the octets by hand
+		// mishandled the carry for ranges wider than a /16 and emitted
+		// out-of-range octets; convert through the 32-bit integer instead.
+		$base = ip2long($start);
 
-		for ($x = 0; $x < 4; $x++) {
-			$ip[$x] += intval($count / $y);
-			$count -= ((intval($count / $y)) * 256);
-			$y /= 256;
-
-			if ($ip[$x] == 256 && $x > 0) {
-				$ip[$x] = 0;
-				$ip[$x - 1] += 1;
-			}
+		if ($base === false) {
+			return false;
 		}
 
-		return implode('.', $ip);
+		return long2ip($base + $count);
 	}
 }
 
@@ -4219,17 +4285,12 @@ function automation_valid_snmp_device(array &$device) : bool {
 			}
 
 			// get system uptime
-			$snmp_sysUptime = cacti_snmp_session_get($session, '.1.3.6.1.6.3.10.2.1.3.0');
+			$snmp_engine_time   = cacti_snmp_session_get($session, '.1.3.6.1.6.3.10.2.1.3.0');
+			$snmp_system_uptime = cacti_snmp_session_get($session, '.1.3.6.1.2.1.1.3.0');
+			$snmp_sysUptime     = cacti_snmp_select_uptime($snmp_system_uptime, $snmp_engine_time);
 
-			if (!empty($snmp_sysUptime)) {
-				$snmp_sysUptime *= 100;
-			} else {
-				$snmp_sysUptime = cacti_snmp_session_get($session, '.1.3.6.1.2.1.1.3.0');
-			}
-
-			if ($snmp_sysUptime != '') {
-				$snmp_sysUptime           = trim(strtr($snmp_sysUptime,'"',' '));
-				$device['snmp_sysUptime'] = $snmp_sysUptime;
+			if ($snmp_sysUptime !== false) {
+				$device['snmp_sysUptime'] = (string) $snmp_sysUptime;
 			}
 
 			$session->close();

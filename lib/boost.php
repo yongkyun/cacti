@@ -1519,13 +1519,13 @@ function boost_rrdtool_get_last_update_time(string $rrd_path, mixed $rrdtool_pip
 	}
 
 	if (read_config_option('storage_location')) {
-		$file_exists = rrdtool_execute("file_exists $rrd_path" , true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST');
+		$file_exists = rrdtool_execute('file_exists ' . cacti_escapeshellarg($rrd_path), true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST');
 	} else {
 		$file_exists = file_exists($rrd_path);
 	}
 
 	if ($file_exists == true) {
-		$return_value = rrdtool_execute("last $rrd_path", true, RRDTOOL_OUTPUT_STDOUT, false, 'BOOST');
+		$return_value = rrdtool_execute('last ' . cacti_escapeshellarg($rrd_path), true, RRDTOOL_OUTPUT_STDOUT, false, 'BOOST');
 	}
 
 	return trim($return_value);
@@ -1667,11 +1667,17 @@ function boost_rrdtool_function_create(int $local_data_id, bool $show_source, mi
 
 	$data_source_path = get_data_source_path($local_data_id, true);
 
+	if (!rrd_check_path($data_source_path)) {
+		cacti_log("ERROR: Refusing unsafe data source path '$data_source_path' for local_data_id $local_data_id", false, 'BOOST');
+
+		return false;
+	}
+
 	/* ok, if that passes lets check to make sure an rra does not already
 	exist, the last thing we want to do is overwrite data! */
 	if ($show_source != true) {
 		if (read_config_option('storage_location')) {
-			$file_exists = rrdtool_execute("file_exists $data_source_path" , true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'POLLER');
+			$file_exists = rrdtool_execute('file_exists ' . cacti_escapeshellarg($data_source_path), true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'POLLER');
 		} else {
 			$file_exists = file_exists($data_source_path);
 		}
@@ -1798,8 +1804,8 @@ function boost_rrdtool_function_create(int $local_data_id, bool $show_source, mi
 	 */
 	if (read_config_option('extended_paths') == 'on') {
 		if (read_config_option('storage_location') > 0) {
-			if (rrdtool_execute('is_dir ' . dirname($data_source_path), true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST') === false) {
-				if (rrdtool_execute('mkdir ' . dirname($data_source_path), true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST') === false) {
+			if (rrdtool_execute('is_dir ' . cacti_escapeshellarg(dirname($data_source_path)), true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST') === false) {
+				if (rrdtool_execute('mkdir ' . cacti_escapeshellarg(dirname($data_source_path)), true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST') === false) {
 					cacti_log("ERROR: Unable to create directory '" . dirname($data_source_path) . "'", false);
 				}
 			}
@@ -1848,7 +1854,7 @@ function boost_rrdtool_function_create(int $local_data_id, bool $show_source, mi
 	if ($show_source == true) {
 		return read_config_option('path_rrdtool') . ' create' . RRD_NL . "$data_source_path$create_ds$create_rra";
 	} else {
-		$success = rrdtool_execute("create $data_source_path $create_ds$create_rra", false, RRDTOOL_OUTPUT_STDOUT, $rrdtool_pipe, 'BOOST');
+		$success = rrdtool_execute('create ' . cacti_escapeshellarg($data_source_path) . " $create_ds$create_rra", false, RRDTOOL_OUTPUT_STDOUT, $rrdtool_pipe, 'BOOST');
 
 		if (CACTI_SERVER_OS != 'win32' && posix_getuid() == 0) {
 			chown($data_source_path, (int) $owner_id);
@@ -1887,7 +1893,7 @@ function boost_rrdtool_function_update(int $local_data_id, string $rrd_path, str
 
 	// create the rrd if one does not already exist
 	if (read_config_option('storage_location')) {
-		$file_exists = rrdtool_execute("file_exists $rrd_path" , true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST');
+		$file_exists = rrdtool_execute('file_exists ' . cacti_escapeshellarg($rrd_path), true, RRDTOOL_OUTPUT_BOOLEAN, $rrdtool_pipe, 'BOOST');
 	} else {
 		$file_exists = file_exists($rrd_path);
 	}
@@ -1913,11 +1919,11 @@ function boost_rrdtool_function_update(int $local_data_id, string $rrd_path, str
 		if ($rrd_update_template != '') {
 			boost_debug("update $rrd_path $update_options --template $rrd_update_template $rrd_update_values");
 
-			rrdtool_execute("update $rrd_path $update_options --template $rrd_update_template $rrd_update_values", false, RRDTOOL_OUTPUT_STDOUT, $rrdtool_pipe, 'BOOST');
+			rrdtool_execute('update ' . cacti_escapeshellarg($rrd_path) . " $update_options --template $rrd_update_template $rrd_update_values", false, RRDTOOL_OUTPUT_STDOUT, $rrdtool_pipe, 'BOOST');
 		} else {
 			boost_debug("update $rrd_path $update_options $rrd_update_values");
 
-			rrdtool_execute("update $rrd_path $update_options $rrd_update_values", false, RRDTOOL_OUTPUT_STDOUT, $rrdtool_pipe, 'BOOST');
+			rrdtool_execute('update ' . cacti_escapeshellarg($rrd_path) . " $update_options $rrd_update_values", false, RRDTOOL_OUTPUT_STDOUT, $rrdtool_pipe, 'BOOST');
 		}
 
 		return 'OK';
@@ -1990,12 +1996,17 @@ function boost_poller_bottom() : void {
 		$command_string = cacti_escapeshellcmd((string) read_config_option('path_php_binary'));
 
 		if ($boost_debug && $boost_log != '') {
+			// exec_background() passes redirect_args to the shell unescaped, so
+			// the admin-set path must be quoted here or it becomes command
+			// injection (issue#7476, forward-port of the release/1.2.31 fix).
+			$safe_log = cacti_escapeshellarg($boost_log);
+
 			if (CACTI_SERVER_OS == 'unix') {
 				$extra_args    = '-q ' . CACTI_PATH_BASE . '/poller_boost.php --debug';
-				$redirect_args =  '>> ' . $boost_log . ' 2>&1';
+				$redirect_args =  '>> ' . $safe_log . ' 2>&1';
 			} else {
 				$extra_args    = '-q ' . CACTI_PATH_BASE . '/poller_boost.php --debug';
-				$redirect_args = '>> ' . $boost_log;
+				$redirect_args = '>> ' . $safe_log;
 			}
 		} else {
 			$extra_args = '-q ' . CACTI_PATH_BASE . '/poller_boost.php';

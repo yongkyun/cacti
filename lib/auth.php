@@ -22,13 +22,15 @@
  +-------------------------------------------------------------------------+
 */
 
+require_once(__DIR__ . '/client_address.php');
+
 include(__DIR__ . '/../include/vendor/GoogleAuthenticator/FixedBitNotation.php');
 include(__DIR__ . '/../include/vendor/GoogleAuthenticator/GoogleAuthenticatorInterface.php');
 include(__DIR__ . '/../include/vendor/GoogleAuthenticator/GoogleAuthenticator.php');
 include(__DIR__ . '/../include/vendor/GoogleAuthenticator/GoogleQrUrl.php');
 include(__DIR__ . '/../include/vendor/GoogleAuthenticator/RuntimeException.php');
 
-use phpseclib3\Crypt\RSA;
+use phpseclib4\Crypt\RSA;
 
 /**
  * Clears a users security token
@@ -195,7 +197,61 @@ function auth_cookie_user_currently_allowed(array $user_info) : bool {
 		return false;
 	}
 
+	if (($user_info['locked'] ?? '') == 'on') {
+		return false;
+	}
+
 	return auth_user_has_access($user_info);
+}
+
+/**
+ * cacti_auth_transition - move a session from unauthenticated to authenticated.
+ *
+ * Issues a new session id so a session identifier planted by an attacker before
+ * login cannot be reused afterwards, and drops the permission caches so the new identity is
+ * evaluated from scratch rather than inheriting the previous one.
+ *
+ * Call this at every point that first sets the session user id, apart from the
+ * guest account, which is not a privilege gain.
+ *
+ * @param int    $user_id The account the session is becoming.
+ * @param string $reason  Where the transition came from, for the log.
+ *
+ * @return bool False when the account is locked and must not be let in.
+ */
+function cacti_auth_transition(int $user_id, string $reason = 'login') : bool {
+	$locked = db_fetch_cell_prepared('SELECT locked
+		FROM user_auth
+		WHERE id = ?',
+		[$user_id]);
+
+	if ($locked === false || $locked == 'on') {
+		cacti_log(sprintf('SECURITY: auth transition blocked for unavailable or locked user %d, reason %s', $user_id, $reason), false, 'AUTH');
+
+		return false;
+	}
+
+	if (session_status() === PHP_SESSION_ACTIVE) {
+		if (!session_regenerate_id(true)) {
+			cacti_log(sprintf('SECURITY: auth transition blocked because session regeneration failed for user %d, reason %s', $user_id, $reason), false, 'AUTH');
+
+			return false;
+		}
+	}
+
+	kill_session_var(SESS_USER_REALMS);
+	kill_session_var(SESS_AUTH_NAMES);
+	kill_session_var(SESS_TREE_PERMS);
+	kill_session_var(SESS_SIMPLE_PERMS);
+	kill_session_var(SESS_SIMPLE_TEMPLATE_PERMS);
+	kill_session_var(SESS_USER_PERMS_KEY);
+	kill_session_var(SESS_USER_2FA);
+	kill_session_var(OPTIONS_USER);
+	kill_session_var(OPTIONS_WEB);
+
+	cacti_log(sprintf('NOTE: auth transition completed for user %d, reason %s', $user_id, $reason), false, 'AUTH', POLLER_VERBOSITY_MEDIUM);
+
+	return true;
 }
 
 /**
@@ -250,10 +306,10 @@ function is_template_account(null|int|string $user_id) : bool {
 /**
  * Whether the current request originates from a reverse proxy that config.php
  * lists in $trusted_proxies. Only such proxies may assert a pre-authenticated
- * user via forwarded HTTP headers. Matching is IP-normalized: when both
- * REMOTE_ADDR and a trusted entry parse as IP addresses, they are compared by
- * packed binary form, so equivalent spellings (for example ::1 and
- * 0:0:0:0:0:0:0:1) match regardless of text representation. A malformed or
+ * user via forwarded HTTP headers. Matching is IP-normalized, so equivalent
+ * spellings (for example ::1 and 0:0:0:0:0:0:0:1) match regardless of text
+ * representation, while an IPv4-mapped entry never silently matches its bare
+ * IPv4 form. CIDR entries such as 10.0.0.0/8 are accepted. A malformed or
  * non-IP entry falls back to exact string equality. An empty or unset list
  * trusts no proxy.
  *
@@ -272,29 +328,7 @@ function is_trusted_proxy() : bool {
 		return false;
 	}
 
-	$remote        = (string) $_SERVER['REMOTE_ADDR'];
-	$remote_packed = @inet_pton($remote);
-
-	foreach ($trusted as $entry) {
-		$entry = (string) $entry;
-
-		/* Compare valid IPs by packed form so alternate spellings of the same
-		 * address match. inet_pton yields 4 bytes for IPv4 and 16 for IPv6, so
-		 * an IPv4-mapped entry never silently matches its bare IPv4 form. */
-		if ($remote_packed !== false) {
-			$entry_packed = @inet_pton($entry);
-
-			if ($entry_packed !== false && hash_equals($entry_packed, $remote_packed)) {
-				return true;
-			}
-		}
-
-		if (hash_equals($entry, $remote)) {
-			return true;
-		}
-	}
-
-	return false;
+	return cacti_trusted_proxy_match((string) $_SERVER['REMOTE_ADDR'], $trusted);
 }
 
 /**
@@ -613,6 +647,47 @@ function user_enable(int $user_id) : void {
 	db_execute_prepared("UPDATE user_auth SET enabled = 'on' WHERE id = ?", [$user_id]);
 
 	reset_user_perms($user_id);
+}
+
+/**
+ * Replace every outstanding password-reset token for a local user.
+ *
+ * Locking the user row serializes the self-service and administrator issuance
+ * paths, so concurrent requests cannot leave multiple valid reset links.
+ *
+ * @param int    $user_id         The local user receiving the token
+ * @param string $hash            Cryptographically random reset-token hash
+ * @param int    $timeout_minutes Token lifetime in minutes
+ *
+ * @return bool True when the replacement token was committed
+ */
+function auth_reset_token_replace(int $user_id, string $hash, int $timeout_minutes) : bool {
+	if ($user_id <= 0 || $hash === '' || $timeout_minutes <= 0 || !db_begin_transaction()) {
+		return false;
+	}
+
+	$locked_user = db_fetch_cell_prepared('SELECT id
+		FROM user_auth
+		WHERE id = ?
+		AND realm = 0
+		AND enabled = "on"
+		FOR UPDATE',
+		[$user_id]);
+
+	$success = (int) $locked_user === $user_id &&
+		db_execute_prepared('DELETE FROM user_auth_reset_hashes WHERE user_id = ?', [$user_id]) !== false &&
+		db_execute_prepared('INSERT INTO user_auth_reset_hashes
+			(user_id, hash, expiry)
+			VALUES (?, ?, date_add(now(), interval ? minute))',
+			[$user_id, $hash, $timeout_minutes]) !== false;
+
+	if ($success && db_commit_transaction()) {
+		return true;
+	}
+
+	db_rollback_transaction();
+
+	return false;
 }
 
 /**
@@ -1670,7 +1745,7 @@ function get_allowed_aggregate_graphs(string $sql_where = '', string $sql_order 
 	}
 
 	if ($graph_id > 0) {
-		$sql_where .= ($sql_where != '' ? ' AND ' : ' ') . " gl.id = $graph_id";
+		$sql_where .= ($sql_where != '' ? ' AND ' : ' ') . ' gl.id = ' . (int) $graph_id;
 	}
 
 	if (read_user_setting('hide_disabled', false, false, $user_id) == 'on') {
@@ -2838,7 +2913,7 @@ function get_allowed_devices(string $sql_where = '', string $sql_order = 'descri
 	}
 
 	if ($device_id > 0) {
-		$sql_where .= ($sql_where != '' ? ' AND ' : 'WHERE ') . " h.id = $device_id";
+		$sql_where .= ($sql_where != '' ? ' AND ' : 'WHERE ') . ' h.id = ' . (int) $device_id;
 	}
 
 	$graph_auth_method = read_config_option('graph_auth_method');
@@ -3640,6 +3715,56 @@ function auth_process_lockout_check(string $username, int $realm) : bool {
 }
 
 /**
+ * Emit a stable, machine-parseable authentication-failure line for external tools
+ * (e.g. fail2ban) alongside the existing human-readable AUTH log entries.  The
+ * grammar is fixed so a fail2ban failregex can key on it reliably across releases:
+ *
+ *   AUTH FAILURE user="<user>" realm="<realm>" ip="<ip>" reason="<reason>"
+ *
+ * The IP comes from get_client_addr(), which is already validated and honours the
+ * trusted-proxy configuration.  The username is attacker-influenced, so quotes and
+ * control characters are stripped to keep the grammar intact and prevent a crafted
+ * username from forging log lines or extra fields.
+ *
+ * @param string $username Username supplied by the client.
+ * @param string $realm    Realm token: local|ldap|domain.
+ * @param string $reason   Reason token: bad_password|no_such_user|2fa.
+ *
+ * @return void
+ */
+function auth_log_failure(string $username, string $realm, string $reason) : void {
+	$clean = static function (string $value) : string {
+		$stripped = preg_replace('/[\x00-\x1f\x7f"]/', '', $value);
+
+		return $stripped ?? '';
+	};
+
+	cacti_log(
+		sprintf(
+			'AUTH FAILURE user="%s" realm="%s" ip="%s" reason="%s"',
+			$clean($username), $clean($realm), get_client_addr(), $clean($reason)
+		),
+		false,
+		'AUTH'
+	);
+}
+
+/**
+ * Map a numeric authentication realm to the token used in auth_log_failure().
+ *
+ * @param int $realm The numeric realm id.
+ *
+ * @return string local|ldap|domain
+ */
+function auth_realm_token(int $realm) : string {
+	if ($realm <= 1) {
+		return 'local';
+	}
+
+	return $realm == 2 ? 'ldap' : 'domain';
+}
+
+/**
  * Called when a user login attempt fails to increment or lockout the user
  * if there is an error, the globals error and error_msg will be set to notify the caller
  * that a lockout is present and not to proceed with login.
@@ -3667,13 +3792,29 @@ function auth_process_lockout(string $username, int $realm) : void {
 
 			if (cacti_sizeof($user)) {
 				if ($user['enabled'] == '') {
-					cacti_log(sprintf('LOGIN FAILED: Local Login Failed for user %s from IP address %s. User account disabled.', $username, get_client_addr()), false, 'AUTH');
+					cacti_log(sprintf("LOGIN FAILED: Login failed for user '%s' from IP address '%s'. User account disabled.", $username, get_client_addr()), false, 'AUTH');
 
 					$error     = true;
 					$error_msg = __('Access Denied!  Login Disabled.');
 				}
 
-				$failed = intval($user['failed_attempts']) + 1;
+				// Increment the counter in the database rather than reading it,
+				// adding one in PHP and writing it back. Concurrent failed logins
+				// would otherwise each read the same value and write the same +1,
+				// undercounting and letting an attacker exceed secpass_lockfailed
+				// before the account locks.
+				db_execute_prepared("UPDATE user_auth
+					SET lastfail = ?, failed_attempts = failed_attempts + 1
+					WHERE username = ?
+					AND realm = ?
+					AND enabled = 'on'",
+					[time(), $username, $realm]);
+
+				$failed = (int) db_fetch_cell_prepared('SELECT failed_attempts
+					FROM user_auth
+					WHERE username = ?
+					AND realm = ?',
+					[$username, $realm]);
 
 				cacti_log(sprintf('LOGIN FAILED: User \'%s\' failed authentication, incrementing lockout (%d of %d)',$username, $failed, $max), false, 'AUTH', POLLER_VERBOSITY_LOW);
 
@@ -3688,15 +3829,6 @@ function auth_process_lockout(string $username, int $realm) : void {
 					$user['locked'] = 'on';
 				}
 
-				$user['lastfail'] = time();
-
-				db_execute_prepared("UPDATE user_auth
-					SET lastfail = ?, failed_attempts = ?
-					WHERE username = ?
-					AND realm = ?
-					AND enabled = 'on'",
-					[$user['lastfail'], $failed, $username, $realm]);
-
 				// Log the invalid password attempt
 				db_execute_prepared('INSERT IGNORE INTO user_log
 					(username, user_id, result, ip, time)
@@ -3704,19 +3836,19 @@ function auth_process_lockout(string $username, int $realm) : void {
 					[$username, $user['id'] ?? 0, get_client_addr()]);
 
 				if ($user['locked'] == 'on') {
-					cacti_log(sprintf("LOGIN FAILED: Local Login Failed for user '%s' from IP Address '%s'. Account is locked out.", $username, get_client_addr()), false, 'AUTH');
+					cacti_log(sprintf("LOGIN FAILED: Login failed for user '%s' from IP address '%s'. Account is locked out.", $username, get_client_addr()), false, 'AUTH');
 
 					$error     = true;
 					$error_msg = __('Your account has been locked.  Please contact your Administrator.');
 				} else {
-					cacti_log(sprintf("LOGIN FAILED: Local Login Failed for user '%s' from IP Address '%s'", $username, get_client_addr()), false, 'AUTH');
+					cacti_log(sprintf("LOGIN FAILED: Login failed for user '%s' from IP address '%s'.", $username, get_client_addr()), false, 'AUTH');
 
 					// error
 					$error     = true;
 					$error_msg = __('Access Denied!  Login Failed.');
 				}
 			} else {
-				cacti_log(sprintf("LOGIN FAILED: Local Login Failed to find user '%s' from IP Address '%s'",  $username, get_client_addr()), false, 'AUTH');
+				cacti_log(sprintf("LOGIN FAILED: Login failed to find user '%s' from IP address '%s'.", $username, get_client_addr()), false, 'AUTH');
 
 				$error     = true;
 				$error_msg = __('Access Denied!  Login Failed.');
@@ -3782,37 +3914,34 @@ function local_auth_login_process(string $username) : array {
 		$user = secpass_login_process($username);
 
 		/**
-		 * If the password needs to be rehashed for security purposes,
-		 * do that now.
+		 * secpass_login_process() returns a partial row on success and [] on any
+		 * failure. Only when it succeeded do we load the full row the caller needs
+		 * and rehash the stored password if the algorithm has moved on. The old
+		 * code re-verified the password here independently: it ran bcrypt a second
+		 * time on every login, and for a correct password on a locked/disabled
+		 * account it repopulated $user even though the primary check had rejected
+		 * the login.
 		 */
-		$stored_pass = db_fetch_cell_prepared('SELECT password
-			FROM user_auth
-			WHERE username = ?
-			AND realm = 0',
-			[$username]);
+		if (cacti_sizeof($user)) {
+			$stored_pass = $user['password'] ?? '';
 
-		if ($stored_pass != '') {
-			$password = gnrv('login_password');
+			$user = db_fetch_row_prepared('SELECT *
+				FROM user_auth
+				WHERE username = ?
+				AND realm = 0',
+				[$username]);
 
-			$valid = compat_password_verify($password, $stored_pass);
+			if ($stored_pass != '' && compat_password_needs_rehash($stored_pass, PASSWORD_DEFAULT)) {
+				$password  = gnrv('login_password');
+				$rehashed  = compat_password_hash($password, PASSWORD_DEFAULT);
 
-			cacti_log("DEBUG: User '" . $username . "' password for rehash is " . ($valid ? '' : 'in') . 'valid', false, 'AUTH', POLLER_VERBOSITY_DEBUG);
+				db_check_password_length();
 
-			if ($valid) {
-				$user = db_fetch_row_prepared('SELECT *
-					FROM user_auth
+				db_execute_prepared('UPDATE user_auth
+					SET password = ?
 					WHERE username = ?
 					AND realm = 0',
-					[$username]);
-
-				if (compat_password_needs_rehash($stored_pass, PASSWORD_DEFAULT)) {
-					$password = compat_password_hash($password, PASSWORD_DEFAULT);
-					db_check_password_length();
-					db_execute_prepared('UPDATE user_auth
-						SET password = ?
-						WHERE username = ?',
-						[$password, $username]);
-				}
+					[$rehashed, $username]);
 			}
 		}
 	}
@@ -4212,6 +4341,13 @@ function secpass_login_process(string $username) : array {
 			return [];
 		}
 	} else {
+		// Run a throw-away verification against a fixed bcrypt hash so an unknown
+		// username costs the same as a known one. Without this, the valid-user path
+		// runs bcrypt (tens of ms) while the unknown-user path returns immediately,
+		// and the response-time delta lets an attacker enumerate valid usernames.
+		// The verify result is discarded; this fixed hash is tied to no account.
+		compat_password_verify((string) $password, '$2y$10$VWBpVwPd5enH/FIf0bNNxO0d12/V8EZag/sNP.SQqsyYWyOFXvaV.');
+
 		// error
 		$error     = true;
 		$error_msg = __('Access Denied!  Login Failed.');
@@ -4551,49 +4687,40 @@ function compat_password_needs_rehash(string $password, string|int $algo, array 
  */
 function auth_user_has_access(array $user) : bool {
 	// See if they have access to any realms
-	$realms = db_fetch_cell_prepared('SELECT COUNT(*)
+	$has_access = db_fetch_cell_prepared('SELECT EXISTS(
+		SELECT 1
 		FROM user_auth_realm
-		WHERE user_id = ?',
+		WHERE user_id = ?)',
 		[$user['id']]);
 
-	if ($realms > 0) {
+	if ($has_access) {
 		return true;
 	}
 
 	// See if they have general graph access as a guest account
-	if (read_config_option('guest_user') > 0) {
+	$guest_access = read_config_option('guest_user') > 0;
+
+	if ($guest_access) {
 		if ($user['show_tree'] == 'on' || $user['show_list'] == 'on' || $user['show_preview'] == 'on') {
 			return true;
 		}
 	}
 
-	// See if they have access to any group realms
-	$user_groups = db_fetch_assoc_prepared('SELECT *
-		FROM user_auth_group_members
-		WHERE user_id = ?',
-		[$user['id']]);
-
-	if (cacti_sizeof($user_groups)) {
-		foreach ($user_groups as $g) {
-			$realms = db_fetch_cell_prepared('SELECT COUNT(*)
-				FROM user_auth_group_realm
-				WHERE group_id = ?',
-				[$g['group_id']]);
-
-			if ($realms > 0) {
-				return true;
-			}
-
-			// See if they have general graph access as a guest account
-			if (read_config_option('guest_user') > 0) {
-				if ($g['show_tree'] == 'on' || $g['show_list'] == 'on' || $g['show_preview'] == 'on') {
-					return true;
-				}
-			}
-		}
-	}
-
-	return false;
+	// Resolve every group membership in one indexed existence query.
+	return (bool) db_fetch_cell_prepared("SELECT EXISTS(
+		SELECT 1
+		FROM user_auth_group_members AS uagm
+		INNER JOIN user_auth_group AS uag
+		ON uag.id = uagm.group_id
+		LEFT JOIN user_auth_group_realm AS uagr
+		ON uagr.group_id = uagm.group_id
+		WHERE uagm.user_id = ?
+		AND uag.enabled = 'on'
+		AND (
+			uagr.realm_id IS NOT NULL
+			OR (? = 1 AND (uag.show_tree = 'on' OR uag.show_list = 'on' OR uag.show_preview = 'on'))
+		))",
+		[$user['id'], $guest_access ? 1 : 0]);
 }
 
 /**
@@ -4627,7 +4754,7 @@ function auth_display_custom_error_message(string $message) : void {
 	print '<div class="ui-state-error ui-corner-all" style="width:50%;margin-left:auto;margin-right:auto;margin-top:200px;padding:20px"><p>' . $message . '</p><p>' . $custom_message . '</p></div>';
 
 	if ($auth_method != AUTH_METHOD_BASIC) {
-		print '<div class="ui-corner-all" style="width:50%;margin:auto;padding:20px"><a href="index.php">' . __('Login Again') . '</a></div><script type="text/javascript">$(function() { $("a").button(); });</script>';
+		print '<div class="ui-corner-all" style="width:50%;margin:auto;padding:20px"><a href="index.php">' . __('Login Again') . '</a></div><script type="text/javascript" ' . CactiSecureHeaders::getNonceAttribute() . '>$(function() { $("a").button(); });</script>';
 	}
 
 	print '</center></body></html>';
@@ -4702,6 +4829,12 @@ function auth_login_redirect(string $login_opts = '') : void {
 
 			// Strip out the login from the referer if present
 			$referer  = str_replace('?action=login', '', $referer);
+
+			// Never emit an attacker-controlled Location. The HTTP_REFERER branch
+			// only checked str_contains(CACTI_PATH_URL), which an absolute URL such
+			// as https://evil.example/cacti/index.php satisfies. validate_redirect_url()
+			// rejects an off-host target and returns a safe local path instead.
+			$referer  = validate_redirect_url($referer);
 
 			if (api_user_realm_auth(auth_basename($referer))) {
 				header('Location: ' . $referer);
@@ -4916,7 +5049,7 @@ function check_reset_no_authentication(int $auth_method) : bool {
 
 		$_SESSION[SESS_USER_ID]         = $admin_id;
 		$_SESSION[SESS_CHANGE_PASSWORD] = true;
-		header('Location: ' . CACTI_PATH_URL . 'auth_changepassword.php?action=force&ref=' . ($_SERVER['HTTP_REFERER'] ?? 'index.php'));
+		header('Location: ' . CACTI_PATH_URL . 'auth_changepassword.php?action=force&ref=' . urlencode(validate_redirect_url($_SERVER['HTTP_REFERER'] ?? 'index.php')));
 
 		exit;
 	}
@@ -5098,4 +5231,40 @@ function remote_agent_fcrdns_confirmed(string $client_addr, array $forward_recor
 	}
 
 	return false;
+}
+
+/**
+ * Validate an effective user delegated by a trusted Remote Agent peer.
+ *
+ * @param mixed         $value  Candidate user identifier from the request
+ * @param callable|null $lookup Optional lookup seam returning a user row
+ *
+ * @return int|false Enabled user identifier, or false when delegation is invalid
+ */
+function remote_agent_validate_effective_user(mixed $value, ?callable $lookup = null) : int|false {
+	if (is_int($value)) {
+		$user_id = $value;
+	} elseif (is_string($value) && ctype_digit($value)) {
+		$user_id = (int) $value;
+	} else {
+		return false;
+	}
+
+	if ($user_id < 1) {
+		return false;
+	}
+
+	$lookup ??= static fn (int $id) : array|false => db_fetch_row_prepared(
+		'SELECT id, enabled
+		FROM user_auth
+		WHERE id = ?',
+		[$id]
+	);
+	$user = $lookup($user_id);
+
+	if (!is_array($user) || (int) ($user['id'] ?? 0) !== $user_id || ($user['enabled'] ?? '') !== 'on') {
+		return false;
+	}
+
+	return $user_id;
 }

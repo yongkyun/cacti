@@ -143,7 +143,7 @@ function remote_client_authorized() : bool {
 
 	// Whitelist check runs before the poller-count guard so single-poller
 	// installs that rely on the whitelist are not incorrectly rejected.
-	if (is_array($remote_agent_whitelist) && in_array($client_addr, $remote_agent_whitelist, true)) {
+	if (is_array($remote_agent_whitelist) && cacti_trusted_proxy_match($client_addr, $remote_agent_whitelist)) {
 		return true;
 	}
 
@@ -185,14 +185,17 @@ function remote_client_authorized() : bool {
 		}
 	}
 
+	// A direct client-IP match against a poller's configured address is
+	// authoritative even when no hostname-based pollers exist, so check it
+	// before the empty-hostname guard.
+	if ($direct_match) {
+		return true;
+	}
+
 	if (!cacti_sizeof($allowed_hostnames)) {
 		cacti_log("Unauthorized remote agent access attempt from $client_addr", false, 'SECURITY');
 
 		return false;
-	}
-
-	if ($direct_match) {
-		return true;
 	}
 
 	foreach ($poller_hostnames as $poller_host) {
@@ -291,7 +294,14 @@ function get_graph_data() : bool {
 
 	// set the effective user
 	if (isrv('effective_user')) {
-		$user = grv('effective_user');
+		$user = remote_agent_validate_effective_user(grv('effective_user'));
+
+		if ($user === false) {
+			http_response_code(403);
+			cacti_log('Rejected invalid Remote Agent effective-user delegation.', false, 'SECURITY');
+
+			return false;
+		}
 	} else {
 		$user = 0;
 	}

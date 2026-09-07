@@ -1,0 +1,40 @@
+name: MD5 Finder Coverage
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/md5-finder-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'lib/CactiMd5FileFinder.php'
+      - 'phpunit-md5-finder-coverage.xml'
+      - 'tests/Unit/CactiMd5FileFinderTest.php'
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/md5-finder-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'lib/CactiMd5FileFinder.php'
+      - 'phpunit-md5-finder-coverage.xml'
+      - 'tests/Unit/CactiMd5FileFinderTest.php'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: md5-finder-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    uses: ./.github/workflows/script-coverage.yml
+    with:
+      job-name: MD5 finder 100% coverage
+      phpunit-config: phpunit-md5-finder-coverage.xml

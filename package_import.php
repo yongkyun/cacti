@@ -414,7 +414,7 @@ function form_actions() : void {
 		<td class='saveRow'>
 			" . html_hidden_input('action', 'actions') . '
 			' . html_hidden_input('import_state', $import_state) . '
-			' . html_hidden_input('drp_action', gnrv('drp_action')) . "
+			' . html_hidden_input('drp_action', grv('drp_action')) . "
 			$save_html
 		</td>
 	</tr>";
@@ -492,7 +492,7 @@ function form_save() : void {
 
 			$_SESSION['sess_import_package'] = file_get_contents($xmlfile);
 		} elseif (isset($_SESSION['sess_import_package'])) {
-			$xmlfile = sys_get_temp_dir() . '/package_import_' . rand();
+			$xmlfile = tempnam(sys_get_temp_dir(), 'package_import_');
 
 			file_put_contents($xmlfile, $_SESSION['sess_import_package']);
 
@@ -637,7 +637,7 @@ function package_file_get_contents(string $package_location, string $package_fil
 			}
 		}
 	} elseif (isset($_SESSION['sess_import_package'])) {
-		$xmlfile = sys_get_temp_dir() . '/package_import_' . rand();
+		$xmlfile = tempnam(sys_get_temp_dir(), 'package_import_');
 
 		$binary_signature = '';
 
@@ -655,12 +655,7 @@ function package_file_get_contents(string $package_location, string $package_fil
 
 				$fdata = base64_decode($file['data'], true);
 
-				// provide two checks against the public key
-				$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA1);
-
-				if ($ok != 1) {
-					$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
-				}
+				$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
 
 				if ($ok != 1) {
 					$fdata = false;
@@ -703,12 +698,7 @@ function package_file_get_contents(string $package_location, string $package_fil
 
 					$fdata = base64_decode($file['data'], true);
 
-					// provide two checks against the public key
-					$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA1);
-
-					if ($ok != 1) {
-						$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
-					}
+					$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
 
 					if ($ok != 1) {
 						$fdata = false;
@@ -779,7 +769,9 @@ function package_diff_file() : void {
 
 			$renderer = new Diff_Renderer_Html_Inline;
 
-			print '<body>' . $diff->render($renderer) . '</body></html>';
+			// Diff_Renderer_Html_Inline::formatLines() HTML-escapes every input
+			// line before adding its own <ins>/<del> markup.
+			print '<body>' . $diff->render($renderer) . '</body></html>'; // nosemgrep: cacti-request-var-echoed-unescaped
 		} else {
 			print 'New file does not exist';
 		}
@@ -846,7 +838,7 @@ function package_verify_key() : void {
 			}
 		}
 	} elseif (isset($_SESSION['sess_import_package'])) {
-		$xmlfile = sys_get_temp_dir() . '/package_import_' . rand();
+		$xmlfile = tempnam(sys_get_temp_dir(), 'package_import_');
 
 		file_put_contents($xmlfile, $_SESSION['sess_import_package']);
 
@@ -946,7 +938,7 @@ function package_accept_key() : void {
 			}
 		}
 	} elseif (isset($_SESSION['sess_import_package'])) {
-		$xmlfile = sys_get_temp_dir() . '/package_import_' . rand();
+		$xmlfile = tempnam(sys_get_temp_dir(), 'package_import_');
 
 		file_put_contents($xmlfile, $_SESSION['sess_import_package']);
 

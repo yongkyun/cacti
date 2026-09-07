@@ -360,7 +360,7 @@ function float_rrdfile(string $rrd_path, int $local_data_id, mixed $step, int $s
 			$fp = fopen($tmp_file, 'w');
 
 			if ($seebug) {
-				$lf = fopen('/tmp/clearer.log', 'a');
+				$lf = fopen(sys_get_temp_dir() . '/cacti_float_rrdfiles.log', 'a');
 			}
 
 			if (is_resource($fp)) {
@@ -719,8 +719,11 @@ function float_kill_running_processes() : void {
 
 	if (cacti_sizeof($processes)) {
 		foreach ($processes as $p) {
-			cacti_log(sprintf('WARNING: Killing Cleanup %s PID %d due to another due to signal or overrun.', ucfirst($p['taskname']), $p['pid']), false, 'RFLOAT');
-			posix_kill($p['pid'], SIGTERM);
+			if (cacti_process_still_running((int) $p['pid'])) {
+				cacti_log(sprintf('WARNING: Killing Cleanup %s PID %d due to another due to signal or overrun.', ucfirst($p['taskname']), $p['pid']), false, 'RFLOAT');
+
+				posix_kill($p['pid'], SIGTERM);
+			}
 
 			unregister_process($p['tasktype'], $p['taskname'], $p['taskid'], $p['pid']);
 		}

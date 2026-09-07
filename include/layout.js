@@ -932,6 +932,27 @@ function cactiReturnTo(href) {
 }
 
 /**
+ * setupSelectmenuScrollClose - Close open select menus when their scroll
+ * container moves so the detached menu cannot remain over unrelated fields.
+ */
+function setupSelectmenuScrollClose() {
+	$('.cactiConsoleContentArea, .cactiGraphContentArea, .cactiGraphContentAreaPreview, .cactiTreeNavigationArea')
+		.add(window)
+		.off('scroll.cactiSelectmenu')
+		.on('scroll.cactiSelectmenu', function () {
+			if (!$('.ui-selectmenu-open').length) {
+				return;
+			}
+
+			$('select').each(function () {
+				if ($(this).selectmenu('instance') !== undefined) {
+					$(this).selectmenu('close');
+				}
+			});
+		});
+}
+
+/**
  * applySkin - This function re-asserts all javascript behavior to a page
  * that can't be set using a live attribute 'on()'
  */
@@ -1010,6 +1031,8 @@ function applySkin() {
 	if (typeof themeReady == 'function') {
 		themeReady();
 	}
+
+	setupSelectmenuScrollClose();
 
 	makeFiltersResponsive();
 
@@ -1908,8 +1931,9 @@ function resizeTreePanel() {
 	$('#jstree').height(jsTreeHeight + 30);
 	$('.cactiTreeNavigationArea').height(treeAreaHeight + searchHeight);
 
-	var visWidth = Math.max.apply(Math, $('#jstree').children(':visible').map(function () {
-		return $(this).width();
+	var treeLeft = $('#jstree').offset().left;
+	var visWidth = Math.max.apply(Math, $('#jstree').find('.jstree-anchor:visible').map(function () {
+		return this.getBoundingClientRect().right - treeLeft;
 	}).get());
 
 	if (visWidth < 0) {
@@ -1929,17 +1953,17 @@ function resizeTreePanel() {
 		$('.cactiGraphContentArea').css('margin-left', visWidth + 5);
 		$('.cactiTreeNavigationArea').css('overflow-x', 'auto');
 	} else {
-		$('.cactiTreeNavigationArea').css('width', navWidth);
-		$('.cactiGraphContentArea').css('margin-left', navWidth + 5);
+		$('.cactiTreeNavigationArea').css('width', visWidth);
+		$('.cactiGraphContentArea').css('margin-left', visWidth + 5);
 		$('.cactiTreeNavigationArea').css('overflow-x', '');
 	}
 
 	var navWidth = $('#navigation').width();
-	if (navWidth > 220) {
-		$('#searcher').css('width', navWidth - 70);
-	} else {
-		$('#searcher').css('width', 150);
-	}
+	$('#searcher').css('width', getTreeSearchWidth(navWidth));
+}
+
+function getTreeSearchWidth(navWidth) {
+	return Math.max(navWidth - 70, 40);
 }
 
 function countHiddenCols(object) {
@@ -3910,11 +3934,7 @@ function keepWindowSize() {
 			$('#content').css({ 'width': '100%', 'height': heightPageContent - 4 });
 
 			var navWidth = $('#navigation').width();
-			if (navWidth > 220) {
-				$('#searcher').css('width', navWidth - 70);
-			} else {
-				$('#searcher').css('width', 150);
-			}
+			$('#searcher').css('width', getTreeSearchWidth(navWidth));
 
 			responsiveResizeGraphs();
 

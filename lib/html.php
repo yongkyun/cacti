@@ -75,7 +75,7 @@ function html_start_box(string $title, string $width, bool $div, int $cell_paddi
 	if (!is_cacti_release() && $title != '' && $beta_count == 0) {
 		$title .= ' [ ' . CACTI_VERSION_BRIEF_FULL . ' ]';
 
-		$beta_count++;
+		$beta_count = 1;
 	}
 
 	if (POLLER_ID > 1 && $title != '' && $mode_count == 0) { // @phpstan-ignore-line
@@ -91,7 +91,7 @@ function html_start_box(string $title, string $width, bool $div, int $cell_paddi
 
 		$title .= ' ]';
 
-		$mode_count++;
+		$mode_count = 1;
 	}
 
 	$table_prefix = basename(get_current_page(), '.php');
@@ -131,7 +131,7 @@ function html_start_box(string $title, string $width, bool $div, int $cell_paddi
 
 		if ($help_file !== false && $help_count == 0 && is_realm_allowed(28)) {
 			print "<span class='cactiHelp' title='" . __esc('Get Page Help') . "'><a class='linkOverDark helpPage' data-page='" . htmle(basename($help_file)) . "' href='#'><i class='ti ti-help actionHelp'></i></a></span>";
-			$help_count++;
+			$help_count = 1;
 		}
 
 		if ($showcols) {
@@ -335,7 +335,7 @@ function html_graph_area(array &$graph_array, string $no_graphs_message = '', st
 	}
 
 	?>
-	<script type='text/javascript'>
+	<script type='text/javascript' <?php print CactiSecureHeaders::getNonceAttribute(); ?>>
 	if ($('#predefined_timespan').val() == 0) {
 		refreshMSeconds = 999999;
 	} else {
@@ -419,7 +419,7 @@ function html_graph_thumbnail_area(array &$graph_array, string $no_graphs_messag
 	}
 
 	?>
-	<script type='text/javascript'>
+	<script type='text/javascript' <?php print CactiSecureHeaders::getNonceAttribute(); ?>>
 	if ($('#predefined_timespan').val() == 0) {
 		refreshMSeconds = 999999;
 	} else {
@@ -604,9 +604,15 @@ function graph_drilldown_icons(int $local_graph_id, string $type = 'graph_button
  */
 function html_nav_bar(string $base_url, int $max_pages, int $current_page, int $rows_per_page, int $total_rows,
 	int $colspan = 30, string $object = '', string $page_var = 'page', string $return_to = '', bool $page_count = true) : string {
+	if (!preg_match('/^[A-Za-z_$][A-Za-z0-9_$]*$/', $page_var)) {
+		$page_var = 'page';
+	}
+
 	if ($object == '') {
 		$object = __('Rows');
 	}
+
+	$object = htmle($object);
 
 	if ($total_rows >= $rows_per_page && $page_count) {
 		if (substr_count($base_url, '?') == 0) {
@@ -662,8 +668,9 @@ function html_nav_bar(string $base_url, int $max_pages, int $current_page, int $
 				$return_to = 'main';
 			}
 
-			$url  = $base_url . $page_var;
-			$nav .= "<script type='text/javascript'>
+			$url            = cacti_js_encode($base_url . $page_var);
+			$return_to_json = cacti_js_encode($return_to);
+			$nav .= "<script type='text/javascript' " . CactiSecureHeaders::getNonceAttribute() . ">
 			function goto$page_var(pageNo) {
 				if (typeof url_graph === 'function') {
 					var url_add=url_graph('')
@@ -671,11 +678,11 @@ function html_nav_bar(string $base_url, int $max_pages, int $current_page, int $
 					var url_add='';
 				};
 
-				strURL = '$url='+pageNo+url_add;
+				strURL = $url + '=' + pageNo + url_add;
 
 				loadUrl({
 					url: strURL,
-					elementId: '$return_to',
+					elementId: $return_to_json,
 				});
 			}</script>";
 		}
@@ -1346,6 +1353,63 @@ function htmle(mixed $string) : string {
 }
 
 /**
+ * html_escape_attr - sanitizes a string for display in an HTML attribute
+ *
+ * @param mixed $string String the attribute value to escape
+ *
+ * @return string The escaped attribute value to be returned.
+ */
+function html_escape_attr(mixed $string = '') : string {
+	static $charset;
+
+	if ($string === null || $string === '') {
+		return '';
+	}
+
+	if ($charset == '') {
+		$charset = ini_get('default_charset');
+	}
+
+	if ($charset == '') {
+		$charset = 'UTF-8';
+	}
+
+	// double_encode is enabled here (unlike html_escape) so that an
+	// already-encoded entity in the input cannot survive into an attribute
+	// value and be decoded back into a quote by the HTML parser.
+	$string = htmlspecialchars((string) $string, ENT_QUOTES | ENT_HTML5, $charset, true);
+
+	// Grave accent can lead to xss; htmlspecialchars leaves it untouched, so
+	// replace it after escaping to avoid double-encoding the entity itself.
+	return str_replace('`', '&#96;', $string);
+}
+
+/**
+ * html_escape_url - escapes a URL for display in an HTML attribute. This
+ *   function does not validate or restrict URL schemes; callers accepting
+ *   untrusted navigation targets must validate them separately.
+ *
+ * @param mixed $url URL the attribute value to escape
+ *
+ * @return string The escaped URL value to be returned.
+ */
+function html_escape_url(mixed $url = '') : string {
+	return html_escape_attr($url);
+}
+
+/**
+ * cacti_script_data - renders JSON data for scripts to read from the DOM
+ *
+ * @param string $id   HTML id for the script element
+ * @param mixed  $data Data to encode as a JavaScript-safe JSON literal
+ *
+ * @return string The script tag containing JSON data.
+ */
+function cacti_script_data(string $id, mixed $data) : string {
+	return "<script type='application/json' id='" . html_escape_attr($id) . "'>" . cacti_js_encode($data) . '</script>';
+}
+
+/**
  * html_escape - sanitizes a string for display
  *
  * @param mixed $string String the string to escape
@@ -1397,7 +1461,7 @@ function html_attributes(array $attributes) : string {
 		if ($value === true) {
 			$output .= ' ' . $name;
 		} else {
-			$output .= ' ' . $name . "='" . html_escape($value) . "'";
+			$output .= ' ' . $name . "='" . html_escape_attr($value) . "'";
 		}
 	}
 
@@ -2043,7 +2107,7 @@ function draw_actions_dropdown(array $actions_array, int $delete_action = 1) : v
 		</div>
 	</div>
 	<input type='hidden' id='action' name='action' value='actions' form='<?php print $form_id; ?>'/>
-	<script type='text/javascript'>
+	<script type='text/javascript' <?php print CactiSecureHeaders::getNonceAttribute(); ?>>
 
 	function setDisabled() {
 		$('tr[id^="line"]').addClass('selectable').prop('disabled', false).removeClass('disabled_row').unbind('click').prop('disabled', false);
@@ -2526,7 +2590,7 @@ function html_make_device_where() : string {
 	}
 
 	if (isrv('host_template_id') && gfrv('host_template_id') > 0) {
-		$sql_where .= ($sql_where != '' ? ' AND ' : ' (') . 'h.location = ' . grv('host_template_id');
+		$sql_where .= ($sql_where != '' ? ' AND ' : ' (') . 'h.host_template_id = ' . grv('host_template_id');
 	}
 
 	if (isrv('external_id') && gnrv('external_id') != '-1') {
@@ -3033,7 +3097,7 @@ function html_spikekill_menu(int $local_graph_id) : void {
 
 function html_spikekill_js() : void {
 	?>
-	<script type='text/javascript'>
+	<script type='text/javascript' <?php print CactiSecureHeaders::getNonceAttribute(); ?>>
 	var spikeKillOpen = false;
 
 	$(function() {
@@ -3201,14 +3265,8 @@ function html_common_header(string $title, string $selectedTheme = '') : void {
 
 	print "<meta content='width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=5' name='viewport'>" . PHP_EOL;
 
-	$script_policy = read_config_option('content_security_policy_script');
-
-	if ($script_policy == 'unsafe-eval') {
-		$script_policy = "'$script_policy'";
-	} else {
-		$script_policy = '';
-	}
 	$alternates = htmle(read_config_option('content_security_alternate_sources'));
+	$script_src = CactiSecureHeaders::scriptSrc($alternates);
 
 	?>
 	<meta http-equiv='X-UA-Compatible' content='IE=Edge,chrome=1'>
@@ -3216,13 +3274,13 @@ function html_common_header(string $title, string $selectedTheme = '') : void {
 	<meta name='description' content='Monitoringauth tool of the Internet'>
 	<meta name='mobile-web-app-capable' content='yes'>
 	<meta name="theme-color" content="#161616"/>
-	<meta http-equiv="Content-Security-Policy" content="default-src *; img-src 'self' https://api.qrserver.com <?php print $alternates; ?> data: blob:; style-src 'self' 'unsafe-inline' <?php print $alternates; ?>; script-src 'self' <?php print htmle($script_policy); ?> 'unsafe-inline' <?php print $alternates; ?>; worker-src 'self' <?php print $alternates; ?>;">
+	<meta http-equiv="Content-Security-Policy" content="default-src *; img-src 'self' https://api.qrserver.com <?php print $alternates; ?> data: blob:; style-src 'self' 'unsafe-inline' <?php print $alternates; ?>; <?php print $script_src; ?>; worker-src 'self' <?php print $alternates; ?>;">
 
 
 	<title><?php print $title; ?></title>
 	<meta http-equiv='Content-Type' content='text/html;charset=utf-8'>
 	<link rel='manifest' href='/manifest.json'>
-	<script type='text/javascript'>
+	<script type='text/javascript' <?php print CactiSecureHeaders::getNonceAttribute(); ?>>
 		var urlPath='<?php print CACTI_PATH_URL; ?>';
 		var aboutCacti = '<?php print __esc('About Cacti'); ?>';
 		var cactiCharts = '<?php print __esc('Charts'); ?>';
@@ -3381,6 +3439,13 @@ function html_common_header(string $title, string $selectedTheme = '') : void {
 	// Global scripts
 	print get_md5_include_js('include/js/screenfull.js', true);
 	print get_md5_include_js('include/js/jquery.js');
+
+	// htmx loads after jQuery so jQuery-based plugins initialised below remain
+	// the primary navigation/AJAX layer. htmx is opt-in per element via hx-*
+	// attributes; hx-boost is deliberately not set globally to avoid interfering
+	// with Cacti's existing form submission and loadUrl() patterns.
+	print htmx_script_tag();
+
 	print get_md5_include_js('include/js/jquery-ui.js');
 	print get_md5_include_js('include/js/jquery.ui.touch.punch.js', true);
 	print get_md5_include_js('include/js/jquery.cookie.js');

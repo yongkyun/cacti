@@ -189,6 +189,10 @@ function import_xml_data(string &$xml_data, bool $import_as_new, int $profile_id
 					if (xml_detect_ignorable_hash_cache($dep_hash_cache[$type][$i]['hash'], $hash_array)) {
 						$repair++;
 					}
+				} elseif ($type == 'graph_template' && !graph_template_input_xml_preflight($hash_array)) {
+					cacti_log('ERROR: Graph template import refused invalid input relationships before the write pass', false, 'SECURITY');
+
+					return false;
 				}
 			}
 		}
@@ -229,11 +233,37 @@ function import_xml_data(string &$xml_data, bool $import_as_new, int $profile_id
 
 				switch($type) {
 					case 'graph_template':
-						$hash_cache += xml_to_graph_template($dep_hash_cache[$type][$i]['hash'], $hash_array, $hash_cache, $dep_hash_cache[$type][$i]['version'], $remove_orphans);
+						$transaction_started = $preview_only ? false : db_begin_transaction();
+
+						if (!$preview_only && !$transaction_started) {
+							return false;
+						}
+
+						$cache_add = xml_to_graph_template($dep_hash_cache[$type][$i]['hash'], $hash_array, $hash_cache, $dep_hash_cache[$type][$i]['version'], $remove_orphans);
+
+						if ($cache_add === false) {
+							if ($transaction_started) {
+								db_rollback_transaction();
+							}
+
+							return false;
+						}
+
+						if ($transaction_started) {
+							db_commit_transaction();
+						}
+
+						$hash_cache += $cache_add;
 
 						break;
 					case 'data_template':
-						$hash_cache += xml_to_data_template($dep_hash_cache[$type][$i]['hash'], $hash_array, $hash_cache, $import_as_new, $profile_id);
+						$cache_add = xml_to_data_template($dep_hash_cache[$type][$i]['hash'], $hash_array, $hash_cache, $import_as_new, $profile_id);
+
+						if ($cache_add === false) {
+							return false;
+						}
+
+						$hash_cache += $cache_add;
 						$repair++;
 
 						break;
@@ -542,12 +572,8 @@ function import_read_package_data(string $xmlfile, string &$public_key, bool $pr
 		return false;
 	}
 
-	// Verify Signature
-	if (strlen($public_key) < 200) {
-		$ok = openssl_verify($xml, $binary_signature, $public_key, OPENSSL_ALGO_SHA1);
-	} else {
-		$ok = openssl_verify($xml, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
-	}
+	// Package signatures use SHA-256 regardless of key representation.
+	$ok = openssl_verify($xml, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
 
 	if ($ok == 1) {
 		cacti_log('NOTE: File is Signed Correctly', false, 'IMPORT', POLLER_VERBOSITY_MEDIUM);
@@ -635,11 +661,7 @@ function import_package(string $xmlfile, int $profile_id = 1, bool $remove_orpha
 		$binary_signature = base64_decode($f['filesignature'], true);
 		$fdata            = base64_decode($f['data'], true);
 
-		if (strlen($public_key) < 200) {
-			$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA1);
-		} else {
-			$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
-		}
+		$ok = openssl_verify($fdata, $binary_signature, $public_key, OPENSSL_ALGO_SHA256);
 
 		if ($ok == 1) {
 			cacti_log('NOTE: File OK: ' . $f['name'], false, 'IMPORT', POLLER_VERBOSITY_MEDIUM);
@@ -668,6 +690,7 @@ function import_package(string $xmlfile, int $profile_id = 1, bool $remove_orpha
 
 		if (strpos($name, chr(0)) !== false || preg_match('#(^|/)\.\.(/|$)#', $normalized_name)) {
 			cacti_log("WARNING: Skipping file with path traversal attempt: $name", false, 'IMPORT');
+			$filestatus[$name] = __('rejected');
 
 			continue;
 		}
@@ -675,6 +698,7 @@ function import_package(string $xmlfile, int $profile_id = 1, bool $remove_orpha
 		// Reject absolute paths: Unix (/...), Windows (\... or C:\...).
 		if (preg_match('#^([/\\\\]|[A-Za-z]:)#', $name)) {
 			cacti_log("WARNING: Skipping file with absolute path: $name", false, 'IMPORT');
+			$filestatus[$name] = __('rejected');
 
 			continue;
 		}
@@ -701,6 +725,7 @@ function import_package(string $xmlfile, int $profile_id = 1, bool $remove_orpha
 
 			if ($resolved_dir === false) {
 				cacti_log('FATAL: Package file destination outside allowed boundaries: ' . $name, true, 'IMPORT');
+				$filestatus[$name] = __('rejected');
 
 				continue;
 			}
@@ -713,6 +738,7 @@ function import_package(string $xmlfile, int $profile_id = 1, bool $remove_orpha
 
 			if (!$in_scripts && !$in_resource) {
 				cacti_log('FATAL: Package file destination outside allowed boundaries: ' . $name, true, 'IMPORT');
+				$filestatus[$name] = __('rejected');
 
 				continue;
 			}
@@ -725,10 +751,21 @@ function import_package(string $xmlfile, int $profile_id = 1, bool $remove_orpha
 						$file = fopen($filename, 'wb');
 
 						if (is_resource($file)) {
-							fwrite($file , $fdata, strlen($fdata));
+							$bytesWritten = fwrite($file, $fdata, strlen($fdata));
 							fclose($file);
 							clearstatcache();
-							$filestatus[$filename] = __('written');
+
+							if ($bytesWritten === strlen($fdata)) {
+								$filestatus[$filename] = __('written');
+							} else {
+								$filestatus[$filename] = __('incomplete write');
+
+								if (file_exists($filename) && !unlink($filename)) {
+									cacti_log('FATAL: Unable to remove incomplete package file: ' . $filename, true, 'IMPORT');
+								}
+
+								clearstatcache();
+							}
 						} else {
 							$filestatus[$filename] = __('could not open');
 						}
@@ -900,6 +937,53 @@ function xml_to_graph_template(string $hash, array &$xml_array, array &$hash_cac
 
 	// track changes
 	$status = 0;
+
+	/* Validate every dynamic graph-item field before the import writes any
+	 * template records. Import is a separate producer from the web form and must
+	 * enforce the same invariant at the data handoff boundary. */
+	$available_graph_item_hashes = [];
+
+	if (isset($xml_array['items']) && is_array($xml_array['items'])) {
+		foreach (array_keys($xml_array['items']) as $item_hash) {
+			$parsed_item_hash = parse_xml_hash($item_hash);
+
+			if ($parsed_item_hash === false) {
+				cacti_log('ERROR: Graph template import refused an invalid Graph Item hash', false, 'SECURITY');
+
+				return false;
+			}
+
+			$available_graph_item_hashes[$parsed_item_hash['hash']] = true;
+		}
+	}
+
+	if (isset($xml_array['inputs']) && !is_array($xml_array['inputs'])) {
+		return false;
+	}
+
+	if (isset($xml_array['inputs'])) {
+		foreach ($xml_array['inputs'] as $item_array) {
+			$column_name = is_array($item_array) && isset($item_array['column_name'])
+				? xml_character_decode($item_array['column_name'])
+				: null;
+
+			if (!graph_template_input_column_is_allowed($column_name) || !isset($item_array['items']) || !is_string($item_array['items'])) {
+				cacti_log('ERROR: Graph template import refused an invalid Graph Item Input field', false, 'SECURITY');
+
+				return false;
+			}
+
+			foreach (array_filter(explode('|', $item_array['items']), static fn (string $item_hash) : bool => $item_hash !== '') as $item_hash) {
+				$parsed_item_hash = parse_xml_hash($item_hash);
+
+				if ($parsed_item_hash === false || !isset($available_graph_item_hashes[$parsed_item_hash['hash']])) {
+					cacti_log('ERROR: Graph template import refused an unresolved Graph Item Input relationship', false, 'SECURITY');
+
+					return false;
+				}
+			}
+		}
+	}
 
 	// import into: graph_templates
 	$_graph_template_id = db_fetch_cell_prepared('SELECT id
@@ -1258,9 +1342,32 @@ function xml_to_graph_template(string $hash, array &$xml_array, array &$hash_cac
 	return $hash_cache;
 }
 
+/**
+ * import_validate_data_source_item - applies the data_sources.php field rules to a
+ * Data Source item coming from a Template XML.  The import path never passes through
+ * those forms, and data_source_name, rrd_minimum and rrd_maximum all end up in an
+ * RRDtool command line, so they have to be checked here instead.
+ *
+ * @param string $field_name The $struct_data_source_item field being imported
+ * @param string $value      The decoded value from the Template XML
+ *
+ * @return bool True when the value is acceptable for the field
+ */
+function import_validate_data_source_item(string $field_name, string $value) : bool {
+	switch ($field_name) {
+		case 'data_source_name':
+			return preg_match('/^[a-zA-Z0-9_-]{1,19}\z/', $value) == 1;
+		case 'rrd_minimum':
+		case 'rrd_maximum':
+			return preg_match('/^(-?([0-9]+(\.[0-9]*)?|[0-9]*\.[0-9]+)([eE][+\-]?[0-9]+)?|U|\|query_ifSpeed\||\|query_ifHighSpeed\|)\z/', $value) == 1;
+	}
+
+	return true;
+}
+
 function xml_to_data_template(string $hash, array &$xml_array, array &$hash_cache, bool $import_as_new, int $profile_id) : mixed {
 	global $struct_data_source, $struct_data_source_item, $import_template_id, $preview_only;
-	global $ignorable_hashes, $import_debug_info, $legacy_template;
+	global $ignorable_hashes, $import_debug_info, $legacy_template, $import_messages;
 
 	// track changes
 	$status = 0;
@@ -1412,6 +1519,18 @@ function xml_to_data_template(string $hash, array &$xml_array, array &$hash_cach
 						$save[$field_name] = resolve_hash_to_id($item_array[$field_name], $hash_cache, 'data_template_rrd');
 					} else {
 						$save[$field_name] = xml_character_decode($item_array[$field_name]);
+
+						if (!import_validate_data_source_item($field_name, $save[$field_name])) {
+							// the value is attacker supplied, so it does not get to add lines to the log
+							$logged = substr(clean_up_lines($save[$field_name]), 0, 100);
+
+							cacti_log(sprintf('FATAL: Data Template \'%s\' rejected, the Data Source Item field \'%s\' holds the invalid value \'%s\'',
+								$xml_array['name'], $field_name, $logged), false, 'IMPORT', POLLER_VERBOSITY_LOW);
+
+							$import_messages[] = 45;
+
+							return false;
+						}
 					}
 				}
 			}

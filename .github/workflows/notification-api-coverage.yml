@@ -1,0 +1,46 @@
+name: Notification API Coverage
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/notification-api-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'lib/CactiEmailChannel.php'
+      - 'lib/CactiNotification.php'
+      - 'lib/CactiRecipient.php'
+      - 'lib/api_notification.php'
+      - 'phpunit-notification-coverage.xml'
+      - 'tests/Unit/Core/CactiNotificationApiTest.php'
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/script-coverage.yml'
+      - '.github/workflows/notification-api-coverage.yml'
+      - '.github/actions/setup-php-composer/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'lib/CactiEmailChannel.php'
+      - 'lib/CactiNotification.php'
+      - 'lib/CactiRecipient.php'
+      - 'lib/api_notification.php'
+      - 'phpunit-notification-coverage.xml'
+      - 'tests/Unit/Core/CactiNotificationApiTest.php'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notification-api-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    uses: ./.github/workflows/script-coverage.yml
+    with:
+      job-name: Notification API 100% coverage
+      phpunit-config: phpunit-notification-coverage.xml

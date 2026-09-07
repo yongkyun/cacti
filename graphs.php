@@ -364,12 +364,13 @@ function form_save() : void {
 
 			if (isset($return_array['local_graph_id'])) {
 				$local_graph_id = $return_array['local_graph_id'];
-				header('Location: graphs.php?action=graph_edit&id=' . $local_graph_id);
+				cacti_redirect('graphs.php', [
+					'action' => 'graph_edit',
+					'id'     => $local_graph_id,
+				]);
 			} else {
-				header('Location: graphs.php');
+				cacti_redirect('graphs.php');
 			}
-
-			exit;
 		}
 
 		if (isrv('save_component_graph')) {
@@ -499,6 +500,31 @@ function form_save() : void {
 
 				if (cacti_sizeof($input_list)) {
 					foreach ($input_list as $input) {
+						$input_var = $input['column_name'] . '_' . $input['id'];
+
+						if (!graph_template_input_column_is_allowed($input['column_name']) ||
+							(isrv($input_var) && !graph_template_input_value_is_allowed($input['column_name'], gnrv($input_var)))) {
+							cacti_log('ERROR: Graph save refused an invalid graph input field', false, 'SECURITY');
+							raise_message('graph_input_invalid', __('A Graph Item Input contains an invalid field or value.'), MESSAGE_LEVEL_ERROR);
+
+							$input_list = [];
+
+							break;
+						}
+					}
+
+					$transaction_started = cacti_sizeof($input_list) ? db_begin_transaction() : false;
+					$mutation_failed     = cacti_sizeof($input_list) && !$transaction_started;
+
+					if ($mutation_failed) {
+						raise_message('graph_input_update_failed', __('Graph Item Input changes could not be saved.'), MESSAGE_LEVEL_ERROR);
+					}
+
+					foreach ($input_list as $input) {
+						if ($mutation_failed) {
+							break;
+						}
+
 						// we need to find out which graph items will be affected by saving this particular item
 						$item_list = db_fetch_assoc_prepared('SELECT gti.id
 							FROM graph_template_input_defs AS gtid
@@ -515,12 +541,34 @@ function form_save() : void {
 								 this is because the db and form are out of sync here, but it is ok to just skip over saving
 								 the inputs in this case. */
 								if (isrv($input['column_name'] . '_' . $input['id'])) {
-									db_execute_prepared('UPDATE graph_templates_item
+									$input_value = gnrv($input['column_name'] . '_' . $input['id']);
+
+									if (!graph_template_input_value_is_allowed($input['column_name'], $input_value)) {
+										cacti_log('ERROR: Graph save refused an invalid graph input value', false, 'SECURITY');
+										raise_message('column_value_invalid', __('A Graph Item Input contains an invalid value.'), MESSAGE_LEVEL_ERROR);
+
+										continue;
+									}
+
+									if (!db_execute_prepared('UPDATE graph_templates_item
 										SET ' . $input['column_name'] . ' = ?
 										WHERE id = ?',
-										[gnrv($input['column_name'] . '_' . $input['id']), $item['id']]);
+										[$input_value, $item['id']])) {
+										$mutation_failed = true;
+
+										break 2;
+									}
 								}
 							}
+						}
+					}
+
+					if ($transaction_started) {
+						if ($mutation_failed) {
+							db_rollback_transaction();
+							raise_message('graph_input_update_failed', __('Graph Item Input changes could not be saved.'), MESSAGE_LEVEL_ERROR);
+						} else {
+							db_commit_transaction();
 						}
 					}
 				}
@@ -537,11 +585,6 @@ function form_save() : void {
 		gfrv('graph_template_id');
 		gfrv('local_graph_template_item_id');
 		// ====================================================
-
-		/* sql_save() inside the items foreach below assigns this; if the
-		 * loop never enters the !is_error_message() branch we still need a
-		 * defined value for the error-redirect URL fallback. */
-		$graph_template_item_id = 0;
 
 		$items[0] = [];
 
@@ -720,27 +763,44 @@ function form_save() : void {
 		}
 
 		if (is_error_message()) {
-			header('Location: graphs.php?action=item_edit&graph_template_item_id=' . ($graph_template_item_id === null ? gnrv('graph_template_item_id') : $graph_template_item_id) . '&id=' . gnrv('local_graph_id'));
-
-			exit;
+			cacti_redirect('graphs.php', [
+				'action'                 => 'item_edit',
+				'graph_template_item_id' => $graph_template_item_id === null ? gnrv('graph_template_item_id') : $graph_template_item_id,
+				'id'                     => gnrv('local_graph_id'),
+			]);
 		} else {
-			header('Location: graphs.php?action=graph_edit&id=' . gnrv('local_graph_id'));
-
-			exit;
+			cacti_redirect('graphs.php', [
+				'action' => 'graph_edit',
+				'id'     => gnrv('local_graph_id'),
+			]);
 		}
 	}
 
 	if ((isrv('save_component_graph_new')) && (ierv('graph_template_id'))) {
-		header('Location: graphs.php?action=graph_edit&host_id=' . gnrv('host_id') . '&new=1');
+		cacti_redirect('graphs.php', [
+			'action'  => 'graph_edit',
+			'host_id' => gnrv('host_id'),
+			'new'     => 1,
+		]);
 	} elseif ((is_error_message()) || (ierv('local_graph_id')) || (gnrv('graph_template_id') != gnrv('graph_template_id_prev')) || (gnrv('host_id') != gnrv('host_id_prev'))) {
-		header('Location: graphs.php?action=graph_edit&id=' . (empty($local_graph_id) ? gnrv('local_graph_id') : $local_graph_id) . (isrv('host_id') ? '&host_id=' . gnrv('host_id') : ''));
-	} elseif (!empty($local_graph_id)) {
-		header('Location: graphs.php?action=graph_edit&id=' . $local_graph_id);
-	} else {
-		header('Location: graphs.php');
-	}
+		$redirect_params = [
+			'action' => 'graph_edit',
+			'id'     => empty($local_graph_id) ? gnrv('local_graph_id') : $local_graph_id,
+		];
 
-	exit;
+		if (isrv('host_id')) {
+			$redirect_params['host_id'] = gnrv('host_id');
+		}
+
+		cacti_redirect('graphs.php', $redirect_params);
+	} elseif (!empty($local_graph_id)) {
+		cacti_redirect('graphs.php', [
+			'action' => 'graph_edit',
+			'id'     => $local_graph_id,
+		]);
+	} else {
+		cacti_redirect('graphs.php');
+	}
 }
 
 function item_movedown() : void {
@@ -927,7 +987,7 @@ function draw_item_filter(bool $render = false, array $host = []) : void {
 function item_edit() : void {
 	global $struct_graph_item, $graph_item_types, $consolidation_functions;
 
-	$id = (!ierv('id') ? '&id=' . grv('id') : '');
+	$id = (!ierv('id') ? '&id=' . (int) gfrv('id') : '');
 
 	$host = db_fetch_row_prepared('SELECT hostname
 		FROM host
@@ -1196,7 +1256,7 @@ function item_edit() : void {
 
 		function applyFilter() {
 			strURL = 'graphs.php?action=item_edit<?php print $id; ?>' +
-				'&local_graph_id=<?php print grv('local_graph_id'); ?>' +
+				'&local_graph_id=<?php print (int) gfrv('local_graph_id'); ?>' +
 				'&data_template_id=' + $('#data_template_id').val() +
 				'&host_id=' + $('#host_id').val();
 
@@ -2616,7 +2676,7 @@ function graph_edit() : void {
 	<script type='text/javascript'>
 
 	var locked         = <?php print($locked ? 'true' : 'false'); ?>;
-	var imageSource    = '<?php print $graph['src']; ?>';
+	var imageSource    = <?php print json_encode($graph['src'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 	var originalWidth  = null;
 	var originalHeight = null;
 
@@ -2920,7 +2980,7 @@ function graphs() : void {
 
 	$graph_list = db_fetch_assoc_prepared($sql, $merged_params);
 
-	$nav = html_nav_bar('graphs.php', MAX_DISPLAY_PAGES, grv('page'), $rows, $total_rows, 5, __('Graphs'), 'page', 'main');
+	$nav = html_nav_bar('graphs.php', MAX_DISPLAY_PAGES, (int) grv('page'), $rows, $total_rows, 5, __('Graphs'), 'page', 'main');
 
 	form_start('graphs.php', 'chk');
 
@@ -3142,7 +3202,7 @@ function create_graphs_filter(string $session_var) : array {
 					'method'         => 'drop_array',
 					'friendly_name'  => __('Template'),
 					'filter'         => FILTER_VALIDATE_REGEXP,
-					'filter_options' => ['options' => ['regexp' => '(cg_[0-9]|dq_[0-9]|[\-0-9])']],
+					'filter_options' => ['options' => ['regexp' => '/^(cg_[0-9]+|dq_[0-9]+|-?[0-9]+)$/']],
 					'default'        => '-1',
 					'pageset'        => true,
 					'array'          => $normalized_templates,

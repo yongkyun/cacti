@@ -734,13 +734,23 @@ $settings['general'] = [
 	],
 	'content_security_policy_script' => [
 		'method'        => 'drop_array',
-		'friendly_name' => __('Content-Security Allow Unsafe JavaScript eval() calls'),
-		'description'   => __('Certain Cacti plugins require the use of unsafe JavaScript eval() calls.  If you select this option, they will be allowed in Cacti.'),
+		'friendly_name' => __('Inline JavaScript Protection'),
+		'description'   => __('Controls how the Content-Security-Policy restricts inline JavaScript.  HTMX keeps the \'unsafe-inline\' policy that all current themes and plugins rely on and matches the behaviour of prior releases.  Nonce Migration emits a strict nonce policy in report-only mode so incompatible core and plugin scripts can be identified without breaking the UI.  Nonce Enforcement blocks scripts without the request nonce and requires CACTI_CSP_NONCE_ENFORCE to be true in include/config.php; without that explicit gate it safely remains in report-only mode.  None also permits unsafe eval() calls and is the least restrictive option.'),
 		'default'       => '',
 		'array'         => [
-			'0'           => __('No'),
-			'unsafe-eval' => __('Yes')
+			''              => __('HTMX (Default)'),
+			'nonce'         => __('Nonce Migration (Report Only)'),
+			'nonce-enforce' => __('Nonce Enforcement (Advanced)'),
+			'unsafe-eval'   => __('None')
 		]
+	],
+	'content_security_report_uri' => [
+		'friendly_name' => __('CSP Violation Report URI'),
+		'description'   => __('Used in Nonce Migration and Nonce Enforcement modes.  URL where browsers post Content-Security-Policy violation reports.  Leave blank to use the bundled csp_report.php handler under the configured Cacti URL path.'),
+		'method'        => 'textbox',
+		'default'       => '',
+		'size'          => '100',
+		'max_length'    => '255',
 	],
 	'content_security_alternate_sources' => [
 		'friendly_name' => __('Content-Security Alternate Sources'),
@@ -749,6 +759,16 @@ $settings['general'] = [
 		'default'       => '',
 		'size'          => '100',
 		'max_length'    => '255',
+	],
+	'htmx_enabled' => [
+		'friendly_name' => __('Enable htmx for in-place filter updates'),
+		'description'   => __('When enabled, the htmx loader is included so pages that opt in can refresh their filter results without a full page reload. Disable only if plugins misbehave.'),
+		'method'        => 'drop_array',
+		'default'       => 'on',
+		'array'         => [
+			'on'  => __('On (default)'),
+			'off' => __('Off'),
+		],
 	],
 	'remote_agent_header' => [
 		'friendly_name' => __('Remote Agent'),
@@ -777,6 +797,23 @@ $settings['general'] = [
 			30 => __('%d Seconds', 30),
 			60 => __('%d Seconds', 60)
 		]
+	],
+	'remote_agent_verify_tls' => [
+		'friendly_name' => __('Verify Remote Agent TLS Certificates'),
+		'description'   => __('Require a trusted certificate whose name matches the Remote Data Collector hostname. Disable only while replacing legacy self-signed certificates.'),
+		'method'        => 'drop_array',
+		'default'       => 'on',
+		'array'         => [
+			'on'  => __('Yes'),
+			'off' => __('No (Legacy Self-signed Certificate)')
+		]
+	],
+	'remote_agent_ca_file' => [
+		'friendly_name' => __('Remote Agent CA File'),
+		'description'   => __('Optional absolute path to a PEM CA bundle used to verify Remote Data Collector certificates. Leave blank to use the PHP/OpenSSL system trust store.'),
+		'method'        => 'filepath',
+		'default'       => '',
+		'max_length'    => 255
 	],
 	'automation_header' => [
 		'friendly_name' => __('Automation'),

@@ -73,7 +73,11 @@ function db_connect_real(string $device, string $user, string $pass, string $db_
 			$device = '127.0.0.1';
 		}
 
-		if (!defined('PDO::MYSQL_ATTR_FOUND_ROWS')) {
+		/* PHP 8.4 moved the driver constants onto Pdo\Mysql and 8.5 deprecates the
+		 * PDO:: spellings, so resolve whichever one this runtime owns. */
+		$found_rows_const = PHP_VERSION_ID >= 80400 ? 'Pdo\Mysql::ATTR_FOUND_ROWS' : 'PDO::MYSQL_ATTR_FOUND_ROWS';
+
+		if (!defined($found_rows_const)) {
 			if (!empty($config['DEBUG_READ_CONFIG_OPTION'])) {
 				$prefix = get_debug_prefix();
 				file_put_contents(sys_get_temp_dir() . '/cacti-option.log',
@@ -88,7 +92,7 @@ function db_connect_real(string $device, string $user, string $pass, string $db_
 			$flags[PDO::ATTR_PERSISTENT] = true;
 		}
 
-		$flags[PDO::MYSQL_ATTR_FOUND_ROWS] = true;
+		$flags[constant($found_rows_const)] = true;
 
 		if ($db_ssl) {
 			if ($db_ssl_ca != '') {
@@ -279,7 +283,7 @@ function db_connect_real(string $device, string $user, string $pass, string $db_
  *
  * @return bool The database true is the database is connected else false
  */
-function db_check_reconnect(mixed $db_conn = false, bool $log = true) : bool {
+function db_check_reconnect(mixed &$db_conn = false, bool $log = true) : bool {
 	global $database_details;
 	global $database_hostname;
 	global $database_username;
@@ -384,6 +388,13 @@ function db_check_reconnect(mixed $db_conn = false, bool $log = true) : bool {
 		);
 
 		if ($cnn_id !== false) {
+			// Propagate the fresh handle back so a caller that passed its own
+			// connection (e.g. the db_execute_prepared retry) does not keep
+			// using the one we just closed.
+			if ($db_conn !== false) {
+				$db_conn = $cnn_id;
+			}
+
 			return true;
 		} else {
 			return false;
@@ -2103,11 +2114,15 @@ function db_commit_transaction(mixed $db_conn = false) : bool {
 		}
 	}
 
-	if (db_fetch_cell('SELECT @@in_transaction') > 0) {
-		return $db_conn->commit();
-	} else {
+	// @@in_transaction is a MariaDB variable. On MySQL the query raises
+	// "Unknown system variable 'in_transaction'", the comparison is false, and
+	// the transaction was left open without ever being committed. PDO tracks
+	// this itself and answers the same question on both engines.
+	if (!$db_conn->inTransaction()) {
 		return false;
 	}
+
+	return $db_conn->commit();
 }
 
 /**
@@ -2265,7 +2280,8 @@ function _db_replace(mixed $db_conn, string $table, array $fieldArray, mixed $ke
 			$sql .= ', ';
 			$sql2 .= ', ';
 		}
-		$sql .= "`$k`";
+		$ek = '`' . str_replace('`', '``', $k) . '`';
+		$sql .= $ek;
 		$sql2 .= $v;
 		$first  = false;
 
@@ -2277,7 +2293,7 @@ function _db_replace(mixed $db_conn, string $table, array $fieldArray, mixed $ke
 			$sql3 .= ', ';
 		}
 
-		$sql3 .= "`$k`=VALUES(`$k`)";
+		$sql3 .= $ek . '=VALUES(' . $ek . ')';
 
 		$first3 = false;
 	}
@@ -2413,6 +2429,23 @@ function db_qstr(mixed $s, mixed $db_conn = false) : string {
 	$s = str_replace(['\\', "\0", "\x1a", "'"], ['\\\\', "\\\0", '\\Z', "\\'"], $s);
 
 	return "'" . $s . "'";
+}
+
+/**
+ * db_like_escape - escape the LIKE wildcard characters in a value so it matches
+ *   literally instead of as a pattern.
+ *
+ *   Pass the result to a bound parameter (LIKE ?), not db_qstr(): the backslash
+ *   escapes are meant for MySQL's LIKE, which reads '\%' / '\_' as the literal
+ *   characters. db_qstr() would double-escape the backslashes. Wrap with the
+ *   surrounding '%' wildcards after escaping, e.g. '%' . db_like_escape($v) . '%'.
+ *
+ * @param mixed $value The value to neutralise for a LIKE clause
+ *
+ * @return string The value with '\', '%' and '_' escaped for LIKE
+ */
+function db_like_escape(mixed $value) : string {
+	return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], (string) $value);
 }
 
 /**

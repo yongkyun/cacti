@@ -1624,7 +1624,10 @@ function utilities_get_mysql_recommendations() : int {
 
 					$remainingMem = ($totalMem * 0.8) - $totalMemorySans;
 
-					$recommendation = $remainingMem / $maxConnections;
+					/* max_connections is read from the server, and a user without
+					   rights to the global variable gets nothing back. Dividing by
+					   that is fatal on PHP 8 rather than the warning it once was. */
+					$recommendation = $maxConnections > 0 ? $remainingMem / $maxConnections : 0;
 
 					$compare         = '<=';
 					$passed          = ($variables[$name] >= ($recommendation / 1024 / 1024)) && $recommendation > 0;
@@ -1969,7 +1972,11 @@ function utility_php_verify_recommends(mixed &$recommends, string $source) : voi
 	$execute_time   = ini_get('max_execution_time');
 	$timezone       = ini_get('date.timezone');
 
-	$cfg_values     = parse_ini_file(get_cfg_var('cfg_file_path'));
+	$config_file    = get_cfg_var('cfg_file_path');
+	$cfg_values     = is_string($config_file) && $config_file !== '' && is_file($config_file) && is_readable($config_file)
+		? parse_ini_file($config_file)
+		: [];
+	$cfg_values     = is_array($cfg_values) ? $cfg_values : [];
 	$cfg_mem_limit  = empty($cfg_values['memory_limit']) ? '' : $cfg_values['memory_limit'];
 	$cfg_timezone   = empty($cfg_values['date.timezone']) ? '' : $cfg_values['date.timezone'];
 	$cfg_max_exec   = empty($cfg_values['max_execution_time']) ? '' : $cfg_values['max_execution_time'];

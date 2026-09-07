@@ -34,6 +34,9 @@ use Symfony\Component\Mime\Exception\RfcComplianceException;
 use Symfony\Component\Mime\Part\DataPart;
 use Symfony\Component\Mime\Part\File;
 
+require_once __DIR__ . '/remote_agent_transport.php';
+require_once __DIR__ . '/client_address.php';
+
 /**
  * Takes a string of text, truncates it to $max_length and appends
  * three periods onto the end
@@ -63,24 +66,14 @@ function title_trim(string $text, int $max_length) : string {
  * @return string the filtered string
  */
 function filter_value(mixed $value, string $filter, string $href = '', string $title = '') : string {
-	static $charset;
-
 	if ($value == '') {
 		return '';
 	}
 
-	if ($charset == '') {
-		$charset = ini_get('default_charset');
-	}
-
-	if ($charset == '') {
-		$charset = 'UTF-8';
-	}
-
-	$value =  htmle($value);
-
-	// Grave Accent character can lead to xss
-	$value = str_replace('`', '&#96;', $value);
+	/* html_escape() resolves the charset and replaces the grave accent itself,
+	 * so the copies that stood here were dead: the charset was never passed on
+	 * and no accent survives the escape for a second pass to find. */
+	$value = htmle($value);
 
 	if ($filter != '') {
 		$value = preg_replace('#(' . preg_quote($filter) . ')#i', "<span class='filteredValue'>\\1</span>", $value) ?? $value;
@@ -886,6 +879,8 @@ function is_valid_theme(mixed &$theme, int $set_user = 0) : bool {
 		$theme = read_config_option('selected_theme', true);
 
 		if (file_exists(CACTI_PATH_INCLUDE . '/themes/' . $theme . '/main.css')) {
+			$valid = true;
+
 			if ($user_table && $set_user && isset($_SESSION[SESS_USER_ID])) {
 				db_execute_prepared('UPDATE settings_user
 					SET value = ?
@@ -1228,7 +1223,7 @@ function raise_message(mixed $message_id, string $message = '', int $message_lev
  */
 function raise_message_javascript(string $title, string $header, string $message, int $level = MESSAGE_LEVEL_MIXED) : void {
 	?>
-	<script type='text/javascript'>
+	<script type='text/javascript' <?php print CactiSecureHeaders::getNonceAttribute(); ?>>
 	var mixedReasonTitle = DOMPurify.sanitize(<?php print json_encode($title, JSON_THROW_ON_ERROR); ?>);
 	var mixedOnPage      = DOMPurify.sanitize(<?php print json_encode($header, JSON_THROW_ON_ERROR); ?>);
 	var message          = DOMPurify.sanitize(<?php print json_encode($message, JSON_THROW_ON_ERROR); ?>);
@@ -1303,7 +1298,13 @@ function display_output_messages() : mixed {
 		}
 	}
 
-	return json_encode($final_messages);
+	/**
+	 * Emitted into an inline <script> by global_session.php, and message
+	 * text carries user supplied values such as device descriptions and
+	 * file names, so it needs the script-context encoder rather than a
+	 * plain json_encode().
+	 */
+	return cacti_js_encode($final_messages);
 }
 
 /**
@@ -2129,8 +2130,19 @@ function update_host_status(int $status, int $host_id, Net_Ping &$ping, int $pin
 			}
 
 			// average time
-			$host['avg_time'] = (($host['total_polls'] - 1 - $host['failed_polls'])
-				* $host['avg_time'] + $ping_time) / ($host['total_polls'] - $host['failed_polls']);
+			/* Consistent counters cannot make this zero, but stored data that
+			 * disagrees can, and PHP 8 raises DivisionByZeroError where PHP 7
+			 * only warned and returned an infinity signed by the numerator.
+			 * That would end the poll for this device, so fall back to the
+			 * current sample instead. */
+			$successful_polls = $host['total_polls'] - $host['failed_polls'];
+
+			if ($successful_polls > 0) {
+				$host['avg_time'] = (($successful_polls - 1)
+					* $host['avg_time'] + $ping_time) / $successful_polls;
+			} else {
+				$host['avg_time'] = $ping_time;
+			}
 		}
 
 		// the host was down, now it's recovering
@@ -2394,7 +2406,7 @@ function prepare_validate_result(string &$result) : mixed {
 
 			$space_cnt = substr_count(trim($result), ' ');
 
-			dsv_log('prepare_validate_result', "data has $space_cnt spaces and $delim_cnt fields which is " . (($space_cnt + 1 == $delim_cnt) ? '' : 'NOT') . ' okay', POLLER_VERBOSITY_MEDIUM);
+			dsv_log('prepare_validate_result', "data has $space_cnt spaces and $delim_cnt fields which is " . (($space_cnt + 1 == $delim_cnt) ? '' : 'NOT ') . 'okay', POLLER_VERBOSITY_MEDIUM);
 
 			return ($space_cnt + 1 == $delim_cnt);
 		}
@@ -2644,7 +2656,10 @@ function test_data_source(int $data_template_id, int $host_id, int $snmp_query_i
 				$output = shell_exec($script_path);
 			} else {
 				// Script server is a bit more complicated
-				$php   = read_config_option('path_php_binary');
+				// path_php_binary is admin-set and reaches the shell below; escape
+				// it so a shell metacharacter cannot inject a command (issue#7469,
+				// forward-port of the release/1.2.31 fix).
+				$php   = cacti_escapeshellcmd((string) read_config_option('path_php_binary'));
 				$parts = explode(' ', $script_path);
 
 				dsv_log('parts', $parts);
@@ -2936,7 +2951,7 @@ function test_data_source(int $data_template_id, int $host_id, int $snmp_query_i
 								$prepend = $script_queries['arg_prepend'];
 							}
 
-							$script_path = read_config_option('path_php_binary') . ' -q ' . get_script_query_path(trim($prepend . ' ' . $script_queries['arg_get'] . ' ' . $identifier . ' "' . $snmp_index . '"'), $script_queries['script_path'], $host_id);
+							$script_path = cacti_escapeshellcmd((string) read_config_option('path_php_binary')) . ' -q ' . get_script_query_path(trim($prepend . ' ' . $script_queries['arg_get'] . ' ' . $identifier . ' "' . $snmp_index . '"'), $script_queries['script_path'], $host_id);
 						} else {
 							$action      = POLLER_ACTION_SCRIPT;
 							$script_path = get_script_query_path(trim(($script_queries['arg_prepend'] ?? '') . ' ' . $script_queries['arg_get'] . ' ' . $identifier . ' "' . $snmp_index . '"'), $script_queries['script_path'], $host_id);
@@ -3226,7 +3241,7 @@ function stri_replace(string $find, string $replace, string $string) : string {
  */
 function clean_up_lines(mixed $string) : mixed {
 	if ($string !== null && is_string($string)) {
-		$string = preg_replace('/\s*[\r\n]+\s*/',' ', $string);
+		$string = preg_replace('/\s*[\r\n]+\s*/', ' ', $string) ?? $string;
 	}
 
 	return $string;
@@ -3429,9 +3444,10 @@ function get_graph_title(int $local_graph_id) : string {
  * @return int The guest account if greater than 0
  */
 function get_guest_account() : int {
-	$user = db_fetch_cell_prepared('SELECT id
+	$user = db_fetch_cell_prepared("SELECT id
 		FROM user_auth
-		WHERE username = ? OR id = ?',
+		WHERE (username = ? OR id = ?)
+		AND enabled = 'on'",
 		[read_config_option('guest_user'), read_config_option('guest_user')]);
 
 	if (empty($user)) {
@@ -3671,7 +3687,7 @@ function get_rrd_cfs(int $local_data_id) : array {
 	$rrdfile = get_data_source_path($local_data_id, true);
 
 	if (rrdtool_file_exists($rrdfile)) {
-		$output = rrdtool_execute("info $rrdfile", false, RRDTOOL_OUTPUT_STDOUT);
+		$output = rrdtool_execute('info ' . cacti_escapeshellarg($rrdfile), false, RRDTOOL_OUTPUT_STDOUT);
 	} else {
 		$output = '';
 	}
@@ -4497,7 +4513,7 @@ function draw_navigation_text(string $type = 'url') : string {
 		}
 	} elseif (preg_match('#link.php\?id=(\d+)#', $_SERVER['REQUEST_URI'], $matches)) {
 		$externalLinks = db_fetch_row_prepared('SELECT title, style FROM external_links WHERE id = ?', [$matches[1]]);
-		$title         = is_array($externalLinks) ? $externalLinks['title'] : '';
+		$title         = is_array($externalLinks) ? htmle($externalLinks['title']) : '';
 		$style         = is_array($externalLinks) ? $externalLinks['style'] : '';
 
 		if ($style == 'CONSOLE') {
@@ -4506,9 +4522,9 @@ function draw_navigation_text(string $type = 'url') : string {
 					<a id='nav_0' href='" . CACTI_PATH_URL . "index.php'>" . __('Console') . '</a>' .
 				'</li>';
 
-			$current_nav .= "<li><a id='nav_1' href='#'>" . __('Link %s', htmle($title)) . '</a></li>';
+			$current_nav .= "<li><a id='nav_1' href='#'>" . __('Link %s', $title) . '</a></li>';
 		} else {
-			$current_nav = "<ul id='breadcrumbs'><li><a id='nav_0'>" . htmle($title) . '</a></li>';
+			$current_nav = "<ul id='breadcrumbs'><li><a id='nav_0'>" . $title . '</a></li>';
 		}
 
 		$tree_title = '';
@@ -5094,6 +5110,109 @@ function debug_log_return(string $type) : string {
 }
 
 /**
+ * Encodes a PHP value for direct inclusion in JavaScript.
+ *
+ * @param mixed $value The value to encode
+ *
+ * @return string The JavaScript-safe JSON literal
+ */
+function cacti_js_encode(mixed $value) : string {
+	$encoded = json_encode(
+		$value,
+		JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+	);
+
+	if ($encoded === false) {
+		return 'null';
+	}
+
+	// U+2028 and U+2029 are valid JSON but are line terminators in JavaScript;
+	// left literal by JSON_UNESCAPED_UNICODE they break an inline <script> parse.
+	return str_replace(["\u{2028}", "\u{2029}"], ['\\u2028', '\\u2029'], $encoded);
+}
+
+/**
+ * Builds a URL with RFC3986-encoded query parameters.
+ *
+ * @param string $path   The base URL or relative path
+ * @param array  $params Query parameters to append
+ *
+ * @return string The encoded URL
+ */
+function cacti_url(string $path, array $params = []) : string {
+	if (cacti_sizeof($params) == 0) {
+		return $path;
+	}
+
+	$query = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+
+	if ($query == '') {
+		return $path;
+	}
+
+	// the query string must precede any fragment
+	$fragment = '';
+	$hash     = strpos($path, '#');
+
+	if ($hash !== false) {
+		$fragment = substr($path, $hash);
+		$path     = substr($path, 0, $hash);
+	}
+
+	return $path . (str_contains($path, '?') ? '&' : '?') . $query . $fragment;
+}
+
+/**
+ * sanitize_redirect_path - validate a local-redirect destination, failing
+ * closed to index.php so request data cannot create an open redirect or
+ * inject headers.
+ *
+ * Split out of cacti_redirect() so the validation can be unit tested without
+ * triggering that function's exit().
+ *
+ * @param string $path The requested local page or path
+ *
+ * @return string The path itself when safe, otherwise 'index.php'
+ */
+function sanitize_redirect_path(string $path) : string {
+	// Fail closed to index.php when the destination is empty, carries a control
+	// byte anywhere (CR/LF header injection), or resolves to an absolute or
+	// protocol-relative URL in either its raw or percent-decoded form. Checking
+	// the decoded form blocks vectors such as /%2F%2Fevil (-> //evil) and
+	// http%3A%2F%2Fevil (-> http://evil).
+	$candidate = trim($path);
+	$decoded   = rawurldecode($candidate);
+	$control   = '/[\\x00-\\x1f\\x7f]/';
+	$absolute  = '#^(?:[a-z][a-z0-9+.\\-]*:|[\\/\\\\]{2})#i';
+
+	if ($candidate                        === ''
+		|| preg_match($control, $candidate)  === 1
+		|| preg_match($control, $decoded)    === 1
+		|| preg_match($absolute, $candidate) === 1
+		|| preg_match($absolute, $decoded)   === 1) {
+		return 'index.php';
+	}
+
+	return $candidate;
+}
+
+/**
+ * Redirect to a local Cacti page and terminate the request.
+ *
+ * Absolute, protocol-relative, and mixed-slash destinations fail closed to
+ * index.php so request data cannot create an open redirect.
+ *
+ * @param string $path   The local page or path
+ * @param array  $params Query parameters to append
+ *
+ * @return never
+ */
+function cacti_redirect(string $path, array $params = []) : never {
+	header('Location: ' . cacti_url(sanitize_redirect_path($path), $params));
+	exit;
+}
+
+/**
  * Strips any character that cannot safely appear in a SQL identifier.
  * Allows word characters, dots (table.column), parentheses and INET_ATON-style
  * wrappers already used by the sort helpers.  Use before concatenating a
@@ -5230,7 +5349,7 @@ function sanitize_uri(string $uri) : string {
 	 * browser as "//evil.com". Drop those leading bytes ourselves before the
 	 * slash-collapse check, then collapse any leading slash/backslash run to a
 	 * single '/' so the URI stays a local path. */
-	$trimmed = preg_replace('/^[\x00-\x20]+/', '', $uri);
+	$trimmed = preg_replace('/^[\x00-\x20]+/', '', $uri) ?? $uri;
 
 	if (preg_match('/^[\/\\\\]{2,}/', $trimmed)) {
 		$uri = '/' . ltrim($trimmed, '/\\');
@@ -5239,8 +5358,12 @@ function sanitize_uri(string $uri) : string {
 	}
 
 	if (str_contains($uri, 'graph_view.php')) {
-		if (!strpos($uri, 'action=')) {
-			$uri = $uri . (strpos($uri, '?') ? '&' : '?') . 'action=' . gnrv('action');
+		/* Both tests were written against strpos(), which returns 0 for a match
+		 * at the start of the string. A URI beginning 'action=' therefore read
+		 * as having none and picked up a second one, and a URI beginning '?'
+		 * was given another '?' instead of an '&'. */
+		if (!str_contains($uri, 'action=')) {
+			$uri = $uri . (str_contains($uri, '?') ? '&' : '?') . 'action=' . gnrv('action');
 		}
 	}
 
@@ -5346,7 +5469,7 @@ function sanitize_unserialize_selected_items(mixed $items) : mixed {
 }
 
 /**
- * verifies all selected graphs only contain numeric and string values
+ * verifies all selected graphs only contain numeric values
  *
  * @param mixed $items An array of serialized items from a post
  *
@@ -5364,6 +5487,14 @@ function sanitize_unserialize_selected_graphs(mixed $items) : array|false {
 
 			if (is_array($items)) {
 				$return_items = $items;
+
+				foreach ($items as $item) {
+					if (!is_numeric($item)) {
+						$return_items = false;
+
+						break;
+					}
+				}
 			}
 		}
 	}
@@ -5398,9 +5529,11 @@ function cacti_escapeshellcmd(string $string) : string {
  * @return string The escaped [quoted|unquoted] string
  */
 function cacti_escapeshellarg(string $string, bool $quote = true) : string {
-	if ($string == '') {
-		return $string;
-	}
+	/* An empty argument used to return early, unquoted, which removed it from
+	 * the command line rather than passing it as empty: 'spine -C ' . '' became
+	 * "spine -C --poller 1" and -C consumed the next option. The early return
+	 * dates from a warning about escaping null (issue#1560), which the string
+	 * type hint now prevents, so the normal path handles the empty case. */
 
 	// remove any carriage returns or line feeds from the argument
 	$string = str_replace(["\n", "\r"], ['', ''], $string);
@@ -5545,8 +5678,15 @@ function admin_email(string $subject, string $message) : bool {
 						$to = $admin_details['email_address'];
 					}
 
-					// If we get any message back then we have failed
-					$result = empty(send_mail($to, $from, $subject, $fin_message, html: true, expandIds: true));
+					require_once(CACTI_PATH_LIBRARY . '/api_notification.php');
+
+					$result = api_notification_send($subject, $fin_message, $to, options: [
+						'email' => [
+							'from'       => $from,
+							'html'       => true,
+							'expand_ids' => true,
+						],
+					]);
 				}
 			}
 		}
@@ -6545,6 +6685,15 @@ function get_dns_from_ip(string $ip, string $dns, int $timeout = 1000) : string 
 	// send our request (and store request size so we can cheat later)
 	$requestsize = @fwrite($handle, $data);
 
+	/* The size is used as the offset the reply is parsed from. A failed write
+	 * returns false, which reads as offset zero and would parse the response
+	 * from the wrong place rather than report that nothing was sent. */
+	if ($requestsize === false) {
+		@fclose($handle);
+
+		return $ip;
+	}
+
 	// get the response
 	$response = @fread($handle, 1000);
 
@@ -6711,7 +6860,6 @@ function cacti_debug_backtrace(string $entry = '', bool $html = false, bool $rec
 		}
 	}
 }
-
 /**
  * calculate_percentiles - Given and array of numbers, calculate the Nth percentile,
  * optionally, return an array of numbers containing elements required for
@@ -7338,21 +7486,51 @@ function is_device_debug_enabled(int $host_id) : bool {
  *
  * @return mixed The response from the remote data collector, or false on failure.
  *
- * @throws ErrorException If an error occurs during the file_get_contents call.
+ * @throws Throwable If an error occurs during the Remote Agent request.
  */
 function call_remote_data_collector(int $poller_id, string $url, string $logtype = 'WEBUI') : mixed {
+	if (!str_starts_with($url, '/') || strpbrk($url, "\0\r\n") !== false) {
+		cacti_log('ERROR: Rejected an invalid Remote Data Collector request path.', false, 'SECURITY');
+
+		return false;
+	}
+
 	$hostname = db_fetch_cell_prepared('SELECT hostname
 		FROM poller
 		WHERE id = ?',
 		[$poller_id]);
+	$hostname = is_string($hostname) ? trim($hostname) : '';
 
-	$port = read_config_option('remote_agent_port');
+	if ($hostname === '') {
+		cacti_log(sprintf('ERROR: PollerID:%d has no Remote Data Collector hostname.', $poller_id), false, $logtype);
 
-	if ($port != '') {
-		$port = ':' . $port;
+		return false;
 	}
 
-	if (!is_ipaddress($hostname)) {
+	$port_setting = trim((string) read_config_option('remote_agent_port'));
+	$port         = '';
+
+	if ($port_setting !== '') {
+		$validated_port = filter_var($port_setting, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+
+		if ($validated_port === false) {
+			cacti_log('ERROR: Remote Agent TCP port is invalid.', false, 'SECURITY');
+
+			return false;
+		}
+
+		$port = ':' . $validated_port;
+	}
+
+	$normalized_host = trim($hostname, '[]');
+
+	if (!is_ipaddress($normalized_host)) {
+		if (filter_var($normalized_host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) === false) {
+			cacti_log(sprintf('ERROR: PollerID:%d has an invalid Remote Data Collector hostname.', $poller_id), false, 'SECURITY');
+
+			return false;
+		}
+
 		$ipaddress = gethostbyname($hostname);
 
 		if (!is_ipaddress($ipaddress)) {
@@ -7366,8 +7544,41 @@ function call_remote_data_collector(int $poller_id, string $url, string $logtype
 		}
 	}
 
-	$fgc_contextoption = get_default_contextoption();
-	$fgc_context       = stream_context_create($fgc_contextoption);
+	$target_ip = is_ipaddress($normalized_host) ? $normalized_host : $ipaddress;
+
+	/* Refuse loopback and link-local targets - 169.254.169.254 is the cloud
+	 * metadata endpoint - and other reserved ranges. RFC1918 private ranges are
+	 * still allowed because distributed Data Collectors legitimately run on
+	 * internal LANs. This closes SSRF to services on the Cacti host or network. */
+	if ($target_ip === '' || filter_var($target_ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE) === false) {
+		cacti_log(sprintf('SECURITY: Refusing Remote Data Collector fetch for PollerID:%d to disallowed address %s.', $poller_id, $target_ip), false, 'SECURITY');
+
+		return false;
+	}
+
+	$ca_file = trim((string) read_config_option('remote_agent_ca_file'));
+
+	if (get_url_type() === 'https' && $ca_file !== '' && (!is_file($ca_file) || !is_readable($ca_file))) {
+		cacti_log('ERROR: Remote Agent CA file is configured but is not a readable file.', false, 'SECURITY');
+
+		return false;
+	}
+
+	/* Pin the outbound request to the IP we just validated. Leaving the hostname
+	 * in the URL would let the OS resolve it a second time when the socket opens,
+	 * so DNS rebinding could swap in a loopback/reserved address after the guard
+	 * above. Connect to $target_ip and carry the hostname in the Host header and
+	 * TLS peer_name so vhost routing and certificate checks still see the name. */
+	$fgc_contextoption = get_default_contextoption(false, $normalized_host);
+
+	$host_header = (filter_var($normalized_host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? '[' . $normalized_host . ']' : $normalized_host) . $port;
+
+	if (isset($fgc_contextoption['http']['header'])) {
+		$fgc_contextoption['http']['header'] .= 'Host: ' . $host_header . "\r\n";
+	}
+
+	$fgc_context  = stream_context_create($fgc_contextoption);
+	$connect_host = filter_var($target_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? '[' . $target_ip . ']' : $target_ip;
 
 	$output = [];
 
@@ -7381,8 +7592,30 @@ function call_remote_data_collector(int $poller_id, string $url, string $logtype
 	$ra_start = microtime(true);
 
 	try {
-		$output = file_get_contents(get_url_type() . '://' . $hostname . $port . $url, false, $fgc_context);
-	} catch (ErrorException $e) {
+		$output = file_get_contents(
+			get_url_type() . '://' . $connect_host . $port . $url,
+			false,
+			$fgc_context,
+			0,
+			REMOTE_AGENT_MAX_RESPONSE_BYTES + 1
+		);
+
+		if (version_compare(PHP_VERSION, '8.4.0', '>=')) {
+			if (function_exists('http_get_last_response_headers')) {
+				$http_response_header = http_get_last_response_headers();
+			} else {
+				$http_response_header = [];
+			}
+		}
+
+		$status = remote_agent_http_status($http_response_header);
+
+		if (!is_string($output) || strlen($output) > REMOTE_AGENT_MAX_RESPONSE_BYTES || $status === null || $status < 200 || $status >= 300) {
+			cacti_log(sprintf('WARNING: Remote Data Collector %d returned an invalid, oversized, or non-success response.', $poller_id), false, $logtype);
+
+			return false;
+		}
+	} catch (Throwable $e) {
 		$ra_end = microtime(true);
 
 		if (debounce_run_notification('poller_connect_down:' . $poller_id)) {
@@ -7402,9 +7635,9 @@ function call_remote_data_collector(int $poller_id, string $url, string $logtype
  * get_url_type - Determines if remote communications are over
  * http or https for remote services.
  *
- * @return mixed http or https
+ * @return string http or https
  */
-function get_url_type() {
+function get_url_type() : string {
 	if (read_config_option('force_https') == 'on') {
 		return 'https';
 	} else {
@@ -7418,13 +7651,12 @@ function get_url_type() {
  * to fulfill system setup related requirements like the usage of Web Single Login
  * cookies for example.
  *
- * @param mixed $timeout A numeric timeout value, or null if not set
+ * @param mixed  $timeout   A numeric timeout value, or null if not set
+ * @param string $peer_name Expected TLS certificate hostname
  *
  * @return array An array to a context
  */
-function get_default_contextoption(mixed $timeout = false) : array {
-	$fgc_contextoption = [];
-
+function get_default_contextoption(mixed $timeout = false, string $peer_name = '') : array {
 	if ($timeout === false) {
 		$timeout = read_config_option('remote_agent_timeout');
 	}
@@ -7433,29 +7665,14 @@ function get_default_contextoption(mixed $timeout = false) : array {
 		$timeout = 5;
 	}
 
-	$protocol = get_url_type();
-
-	if (in_array($protocol, ['ssl', 'https', 'ftps'], true)) {
-		$fgc_contextoption = [
-			'ssl' => [
-				'verify_peer'       => false,
-				'verify_peer_name'  => false,
-				'allow_self_signed' => true,
-			]
-		];
-	}
-
-	if ($protocol == 'https') {
-		$fgc_contextoption['https'] = [
-			'timeout'       => $timeout,
-			'ignore_errors' => true
-		];
-	} elseif ($protocol == 'http') {
-		$fgc_contextoption['http'] = [
-			'timeout'       => $timeout,
-			'ignore_errors' => true
-		];
-	}
+	$protocol          = get_url_type();
+	$fgc_contextoption = remote_agent_context_options(
+		$protocol,
+		(int) $timeout,
+		read_config_option('remote_agent_verify_tls') !== 'off',
+		trim((string) read_config_option('remote_agent_ca_file')),
+		$peer_name
+	);
 
 	$fgc_contextoption = api_plugin_hook_function('fgc_contextoption', $fgc_contextoption);
 
@@ -8332,12 +8549,13 @@ function get_rrdtool_version() : string {
 	return $version;
 }
 
-function get_installed_rrdtool_version() : string {
+function get_installed_rrdtool_version() : string|false {
 	global $rrdtool_versions;
-	static $version = '';
+	static $version = null;
 
-	if ($version == '') {
+	if ($version === null) {
 		$rrdtool = read_config_option('path_rrdtool');
+		$version = false;
 
 		if (!empty($rrdtool)) {
 			if (CACTI_SERVER_OS == 'win32') {
@@ -8346,15 +8564,31 @@ function get_installed_rrdtool_version() : string {
 				$shell = shell_exec(cacti_escapeshellcmd(read_config_option('path_rrdtool')) . ' -v 2>&1');
 			}
 
-			$version = false;
-
 			if (preg_match('/^RRDtool ([0-9.]+) /', (string) ($shell ?? ''), $matches)) {
-				foreach ($rrdtool_versions as $rrdtool_version => $rrdtool_version_text) {
-					if (cacti_version_compare($rrdtool_version, $matches[1], '<=')) {
-						$version = $rrdtool_version;
-					}
-				}
+				$version = get_supported_rrdtool_version($matches[1], $rrdtool_versions);
 			}
+		}
+	}
+
+	return $version;
+}
+
+/**
+ * Map an installed RRDtool release to the newest capability level supported
+ * by Cacti.
+ *
+ * @param string $installed_version  The version reported by the RRDtool binary
+ * @param array  $supported_versions Ordered map of supported versions to labels
+ *
+ * @return string|false The supported capability level, or false when the
+ *                      installed release predates every supported version
+ */
+function get_supported_rrdtool_version(string $installed_version, array $supported_versions) : string|false {
+	$version = false;
+
+	foreach ($supported_versions as $supported_version => $label) {
+		if (cacti_version_compare($supported_version, $installed_version, '<=')) {
+			$version = $supported_version;
 		}
 	}
 
@@ -8513,7 +8747,7 @@ function get_theme_paths(string $format, string $path, string|null $theme = null
  * @return string
  */
 function get_md5_include_js(string $path, bool $async = false, string|null $theme = null, string|null $file = null) : string {
-	$format = '<script type=\'text/javascript\' src=\'%s\'%s></script>';
+	$format = '<script type=\'text/javascript\' src=\'%s\'%s ' . CactiSecureHeaders::getNonceAttribute() . '></script>';
 
 	return get_theme_paths($format, $path, $theme, $file, true, $async ? ' async' : '');
 }
@@ -8775,7 +9009,6 @@ function get_running_user() : string {
 
 	return (empty($tmp_user) ? 'apache' : $tmp_user);
 }
-
 /**
  * Returns a string for debugging purposes
  *
@@ -8843,28 +9076,13 @@ function get_client_addr() : string|false {
 		$proxy_headers[] = 'REMOTE_ADDR';
 	}
 
-	$client_addr = false;
-
-	foreach ($proxy_headers as $header) {
-		if (!empty($_SERVER[$header])) {
-			$header_ips = explode(',', $_SERVER[$header]);
-
-			foreach ($header_ips as $header_ip) {
-				if (!empty($header_ip)) {
-					if (!filter_var($header_ip, FILTER_VALIDATE_IP)) {
-						cacti_log('ERROR: Invalid remote client IP Address found in header (' . $header . ').', false, 'AUTH', POLLER_VERBOSITY_DEBUG);
-					} else {
-						$client_addr = $header_ip;
-						cacti_log('DEBUG: Using remote client IP Address found in header (' . $header . '): ' . $client_addr . ' (' . $_SERVER[$header] . ')', false, 'AUTH', POLLER_VERBOSITY_DEBUG);
-
-						break 2;
-					}
-				}
-			}
-		}
-	}
-
-	return $client_addr;
+	/**
+	 * A proxy appends to the forwarded chain, so the leftmost entry is client
+	 * supplied.  Resolution only honours forwarded headers when the immediate
+	 * peer is listed in $trusted_proxies, and then walks the chain from the
+	 * right.  With no trusted proxy configured this yields REMOTE_ADDR.
+	 */
+	return cacti_resolve_client_addr($_SERVER, $config['trusted_proxies'] ?? [], $proxy_headers);
 }
 
 /**
@@ -8876,11 +9094,24 @@ function get_client_addr() : string|false {
  * @return bool True when the connection is HTTPS, false otherwise.
  */
 function cacti_is_https() : bool {
-	if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] === '' || $_SERVER['HTTPS'] === '0') {
-		return false;
+	global $config;
+
+	if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== '' && $_SERVER['HTTPS'] !== '0' && strtolower($_SERVER['HTTPS']) !== 'off') {
+		return true;
 	}
 
-	return strtolower($_SERVER['HTTPS']) !== 'off';
+	// Honour a forwarded proto only when we are configured to trust proxy
+	// headers, so a client cannot force the Secure flag on a plaintext request.
+	if (!empty($config['proxy_headers'])) {
+		$fwd_proto = isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ? strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) : '';
+		$fwd_ssl   = isset($_SERVER['HTTP_X_FORWARDED_SSL']) ? strtolower($_SERVER['HTTP_X_FORWARDED_SSL']) : '';
+
+		if ($fwd_proto === 'https' || $fwd_ssl === 'on') {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 /**
@@ -10066,4 +10297,130 @@ if (!function_exists('stats_standard_deviation')) {
 
 		return sqrt($carry / $total_items);
 	}
+}
+
+/**
+ * cacti_normalize_windows_path - folds a Windows path into a comparable form
+ *
+ * @param mixed $path The path to normalize
+ *
+ * @return string The lower cased, forward slashed path
+ */
+function cacti_normalize_windows_path(mixed $path) : string {
+	$lower = strtolower((string) $path);
+
+	/**
+	 * Long-path prefixes.  Strip \\?\UNC\ first so the remaining \\ is
+	 * preserved for UNC share comparison; then strip bare \\?\ which only
+	 * wraps drive-letter paths for filesystem APIs.
+	 */
+	if (strpos($lower, '\\\\?\\unc\\') === 0) {
+		$lower = '\\\\' . substr($lower, 8);
+	} elseif (strpos($lower, '\\\\?\\') === 0) {
+		$lower = substr($lower, 4);
+	}
+
+	$lower = str_replace('\\', '/', $lower);
+
+	// drop trailing slashes except for a lone '/', the drive-root case
+	if (strlen($lower) > 1) {
+		$lower = rtrim($lower, '/');
+	}
+
+	return $lower;
+}
+
+/**
+ * cacti_path_is_within - checks that a resolved path sits under a base directory
+ *
+ * @param string    $candidate The path to test
+ * @param string    $base      The directory it must stay within
+ * @param bool|null $windows   Force Windows comparison rules, null to detect
+ *
+ * @return bool True when the candidate resolves inside the base
+ */
+function cacti_path_is_within(string $candidate, string $base, ?bool $windows = null) : bool {
+	$resolved = realpath($candidate);
+
+	if ($resolved === false) {
+		return false;
+	}
+
+	$base_resolved = realpath($base);
+
+	if ($base_resolved === false) {
+		return false;
+	}
+
+	if ($windows ?? (DIRECTORY_SEPARATOR === '\\')) {
+		$resolved      = cacti_normalize_windows_path($resolved);
+		$base_resolved = cacti_normalize_windows_path($base_resolved);
+	}
+
+	return strpos($resolved, $base_resolved . '/') === 0 || $resolved === $base_resolved;
+}
+
+/**
+ * validate_relative_path_within - validates an untrusted relative path
+ *
+ * Rejects absolute paths, drive letters, empty or dot segments, and symlinked
+ * segments under the base, then confirms the result resolves inside the base.
+ *
+ * @param mixed  $path     The untrusted relative path
+ * @param string $base_dir The base directory the path must stay within
+ *
+ * @return mixed The validated absolute path, or false when invalid
+ */
+function validate_relative_path_within(mixed $path, string $base_dir) : mixed {
+	if (!is_string($path) || $path === '' || strpos($path, "\0") !== false) {
+		return false;
+	}
+
+	$normalized = str_replace('\\', '/', $path);
+
+	if ($normalized === '' || $normalized[0] === '/' || preg_match('/^[a-zA-Z]:\//', $normalized)) {
+		return false;
+	}
+
+	$parts = [];
+
+	foreach (explode('/', $normalized) as $part) {
+		if ($part === '' || $part === '.' || $part === '..') {
+			return false;
+		}
+
+		$parts[] = $part;
+	}
+
+	$base_real = realpath($base_dir);
+
+	if ($base_real === false) {
+		return false;
+	}
+
+	$candidate = $base_real . '/' . implode('/', $parts);
+
+	// block symlink pivots under writable base paths
+	$walk = $base_real;
+
+	foreach ($parts as $part) {
+		$walk .= '/' . $part;
+
+		if (file_exists($walk) && is_link($walk)) {
+			return false;
+		}
+	}
+
+	/**
+	 * An entry that does not exist yet is judged by its parent directory.
+	 * cacti_path_is_within() already fails closed when realpath() cannot
+	 * resolve either side, so both cases share one check.
+	 */
+	$anchor = file_exists($candidate) ? $candidate : dirname($candidate);
+
+	if (!cacti_path_is_within($anchor, $base_real)) {
+		return false;
+	}
+
+	return $candidate;
 }
